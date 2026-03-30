@@ -2,13 +2,19 @@
   "schema_version": 1,
   "templates": {
     "rag-agent": {
-      "latest": "0.1.0",
+      "latest": "0.0.1",
       "description": "Secure RAG agent with Presidio PII, injection detection, and CloudFormation",
       "versions": {
         "0.1.0": {
           "sha256": "63f73797e027083e566ca1543999ac28576d1f3e39be6160a7bb9231f0eb2f51",
           "sources": [
             "https://github.com/EarlyCore-AI/earlycore-templates/releases/download/v0.1.0/rag-agent-v0.1.0.tar.gz"
+          ]
+        },
+        "0.0.1": {
+          "sha256": "4da0ed0af2105d3a3bd93b460ed02e120186906e4f88f6b9363d7eedf13a9146",
+          "sources": [
+            "https://github.com/EarlyCore-AI/earlycore-templates/releases/download/v0.0.1/rag-agent-v0.0.1.tar.gz"
           ]
         }
       }
