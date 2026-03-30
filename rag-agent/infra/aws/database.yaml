@@ -77,7 +77,7 @@ Resources:
       Description: !Sub "PostgreSQL 16 parameters for ${ClientName} RAG agent with pgvector"
       Family: postgres16
       Parameters:
-        shared_preload_libraries: "vector"
+        shared_preload_libraries: "pg_stat_statements"
         log_min_duration_statement: "1000"
         log_statement: "ddl"
         rds.force_ssl: "1"
