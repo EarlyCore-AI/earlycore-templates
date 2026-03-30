@@ -1,8 +1,9 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
-  EarlyCore RAG Agent - Master Stack.
-  Orchestrates nested stacks for VPC, ECS, RDS, ElastiCache, S3, IAM,
-  monitoring, and secrets management.
+  EarlyCore RAG Agent - Main Compute Stack.
+  Orchestrates VPC, ECS, RDS, ElastiCache, IAM, monitoring, and guardrails.
+  Imports stateful resource ARNs from the data stack (earlycore-{client}-{env}-data).
+  Safe to delete and redeploy without losing data.
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -12,6 +13,7 @@ Metadata:
         Parameters:
           - ClientName
           - Environment
+          - DataStackName
           - AlertEmail
       - Label:
           default: Networking
@@ -26,6 +28,7 @@ Metadata:
           - MaxCount
           - AgentImageUri
           - SidecarImageUri
+          - CertificateArn
       - Label:
           default: Database
         Parameters:
@@ -46,10 +49,6 @@ Metadata:
         Parameters:
           - UseBedrockGuardrails
           - UseCMEK
-      - Label:
-          default: Secrets
-        Parameters:
-          - EarlycoreApiKey
 
 Parameters:
   ClientName:
@@ -68,6 +67,13 @@ Parameters:
       - production
       - staging
       - development
+
+  DataStackName:
+    Type: String
+    Description: >-
+      Name of the stateful data stack whose exports this stack imports.
+      Defaults to earlycore-{ClientName}-{Environment}-data.
+    Default: ""
 
   VpcCidr:
     Type: String
@@ -120,6 +126,13 @@ Parameters:
     Type: String
     Description: Image URI for the EarlyCore sidecar container.
     Default: ghcr.io/earlycore/sidecar:latest
+
+  CertificateArn:
+    Type: String
+    Description: >-
+      ACM certificate ARN for HTTPS (port 443). Leave empty to use HTTP (port 80).
+      Required for production. Obtain from AWS Certificate Manager.
+    Default: ""
 
   UseManagedDatabase:
     Type: String
@@ -174,11 +187,6 @@ Parameters:
       - openai
       - anthropic
 
-  EarlycoreApiKey:
-    Type: String
-    Description: EarlyCore platform API key.
-    NoEcho: true
-
   AlertEmail:
     Type: String
     Description: Email address for CloudWatch alarm notifications.
@@ -195,7 +203,7 @@ Parameters:
 
   UseCMEK:
     Type: String
-    Description: Use a customer-managed KMS key for encryption across all resources.
+    Description: Use a customer-managed KMS key (must match data stack setting).
     Default: "false"
     AllowedValues:
       - "true"
@@ -215,6 +223,7 @@ Conditions:
     - !Equals [!Ref UseBedrockGuardrails, "true"]
     - !Equals [!Ref LLMProvider, bedrock]
   EnableCMEK: !Equals [!Ref UseCMEK, "true"]
+  HasDataStackName: !Not [!Equals [!Ref DataStackName, ""]]
 
 Resources:
   VPCStack:
@@ -236,45 +245,6 @@ Resources:
         - Key: ManagedBy
           Value: earlycore
 
-  SecretsStack:
-    Type: AWS::CloudFormation::Stack
-    Properties:
-      TemplateURL: !Sub "${TemplateBaseUrl}/secrets.yaml"
-      Parameters:
-        ClientName: !Ref ClientName
-        Environment: !Ref Environment
-        EarlycoreApiKey: !Ref EarlycoreApiKey
-      Tags:
-        - Key: Name
-          Value: !Sub "${ClientName}-secrets-stack"
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Client
-          Value: !Ref ClientName
-        - Key: ManagedBy
-          Value: earlycore
-
-  StorageStack:
-    Type: AWS::CloudFormation::Stack
-    Properties:
-      TemplateURL: !Sub "${TemplateBaseUrl}/storage.yaml"
-      Parameters:
-        ClientName: !Ref ClientName
-        Environment: !Ref Environment
-        KmsKeyArn: !If
-          - EnableCMEK
-          - !GetAtt EncryptionStack.Outputs.KmsKeyArn
-          - ""
-      Tags:
-        - Key: Name
-          Value: !Sub "${ClientName}-storage-stack"
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Client
-          Value: !Ref ClientName
-        - Key: ManagedBy
-          Value: earlycore
-
   IAMStack:
     Type: AWS::CloudFormation::Stack
     Properties:
@@ -283,8 +253,18 @@ Resources:
         ClientName: !Ref ClientName
         Environment: !Ref Environment
         LLMProvider: !Ref LLMProvider
-        DocumentBucketArn: !GetAtt StorageStack.Outputs.DocumentBucketArn
-        SecretsArnPrefix: !GetAtt SecretsStack.Outputs.SecretsArnPrefix
+        DocumentBucketArn: !If
+          - HasDataStackName
+          - !ImportValue
+              Fn::Sub: "${DataStackName}-data-DocumentBucketArn"
+          - !ImportValue
+              Fn::Sub: "${ClientName}-${Environment}-data-DocumentBucketArn"
+        SecretsArnPrefix: !If
+          - HasDataStackName
+          - !ImportValue
+              Fn::Sub: "${DataStackName}-data-SecretsArnPrefix"
+          - !ImportValue
+              Fn::Sub: "${ClientName}-${Environment}-data-SecretsArnPrefix"
         UseBedrockGuardrails: !Ref UseBedrockGuardrails
       Tags:
         - Key: Name
@@ -314,27 +294,6 @@ Resources:
         - Key: ManagedBy
           Value: earlycore
 
-  EncryptionStack:
-    Type: AWS::CloudFormation::Stack
-    Condition: EnableCMEK
-    DependsOn:
-      - IAMStack
-    Properties:
-      TemplateURL: !Sub "${TemplateBaseUrl}/encryption.yaml"
-      Parameters:
-        ClientName: !Ref ClientName
-        Environment: !Ref Environment
-        TaskRoleArn: !GetAtt IAMStack.Outputs.TaskRoleArn
-      Tags:
-        - Key: Name
-          Value: !Sub "${ClientName}-encryption-stack"
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Client
-          Value: !Ref ClientName
-        - Key: ManagedBy
-          Value: earlycore
-
   DatabaseStack:
     Type: AWS::CloudFormation::Stack
     Condition: UseManagedDB
@@ -350,7 +309,12 @@ Resources:
         IsProduction: !If [IsProduction, "true", "false"]
         KmsKeyArn: !If
           - EnableCMEK
-          - !GetAtt EncryptionStack.Outputs.KmsKeyArn
+          - !If
+              - HasDataStackName
+              - !ImportValue
+                  Fn::Sub: "${DataStackName}-data-KmsKeyArn"
+              - !ImportValue
+                  Fn::Sub: "${ClientName}-${Environment}-data-KmsKeyArn"
           - ""
       Tags:
         - Key: Name
@@ -373,11 +337,21 @@ Resources:
         NodeType: !Ref CacheNodeType
         IsolatedSubnetIds: !GetAtt VPCStack.Outputs.IsolatedSubnetIds
         CacheSecurityGroupId: !GetAtt VPCStack.Outputs.CacheSecurityGroupId
-        CacheAuthTokenSecretArn: !GetAtt SecretsStack.Outputs.RedisAuthTokenSecretArn
+        CacheAuthTokenSecretArn: !If
+          - HasDataStackName
+          - !ImportValue
+              Fn::Sub: "${DataStackName}-data-RedisAuthTokenSecretArn"
+          - !ImportValue
+              Fn::Sub: "${ClientName}-${Environment}-data-RedisAuthTokenSecretArn"
         IsProduction: !If [IsProduction, "true", "false"]
         KmsKeyArn: !If
           - EnableCMEK
-          - !GetAtt EncryptionStack.Outputs.KmsKeyArn
+          - !If
+              - HasDataStackName
+              - !ImportValue
+                  Fn::Sub: "${DataStackName}-data-KmsKeyArn"
+              - !ImportValue
+                  Fn::Sub: "${ClientName}-${Environment}-data-KmsKeyArn"
           - ""
       Tags:
         - Key: Name
@@ -431,11 +405,28 @@ Resources:
         ContainerMemory: !Ref ContainerMemory
         DesiredCount: !Ref DesiredCount
         MaxCount: !Ref MaxCount
+        CertificateArn: !Ref CertificateArn
+        IsProduction: !If [IsProduction, "true", "false"]
         AgentLogGroupName: !GetAtt MonitoringStack.Outputs.AgentLogGroupName
         SidecarLogGroupName: !GetAtt MonitoringStack.Outputs.SidecarLogGroupName
-        EarlycoreApiKeySecretArn: !GetAtt SecretsStack.Outputs.EarlycoreApiKeySecretArn
-        AgentConfigSecretArn: !GetAtt SecretsStack.Outputs.AgentConfigSecretArn
-        DocumentBucketName: !GetAtt StorageStack.Outputs.DocumentBucketName
+        EarlycoreApiKeySecretArn: !If
+          - HasDataStackName
+          - !ImportValue
+              Fn::Sub: "${DataStackName}-data-EarlycoreApiKeySecretArn"
+          - !ImportValue
+              Fn::Sub: "${ClientName}-${Environment}-data-EarlycoreApiKeySecretArn"
+        AgentConfigSecretArn: !If
+          - HasDataStackName
+          - !ImportValue
+              Fn::Sub: "${DataStackName}-data-AgentConfigSecretArn"
+          - !ImportValue
+              Fn::Sub: "${ClientName}-${Environment}-data-AgentConfigSecretArn"
+        DocumentBucketName: !If
+          - HasDataStackName
+          - !ImportValue
+              Fn::Sub: "${DataStackName}-data-DocumentBucketName"
+          - !ImportValue
+              Fn::Sub: "${ClientName}-${Environment}-data-DocumentBucketName"
         DatabaseEndpoint: !If
           - UseManagedDB
           - !GetAtt DatabaseStack.Outputs.Endpoint
@@ -460,12 +451,6 @@ Outputs:
     Value: !GetAtt ECSStack.Outputs.LoadBalancerDNS
     Export:
       Name: !Sub "${ClientName}-${Environment}-agent-endpoint"
-
-  DocumentBucketName:
-    Description: S3 bucket for document upload and storage.
-    Value: !GetAtt StorageStack.Outputs.DocumentBucketName
-    Export:
-      Name: !Sub "${ClientName}-${Environment}-document-bucket"
 
   DatabaseEndpoint:
     Condition: UseManagedDB
@@ -494,13 +479,6 @@ Outputs:
     Value: !GetAtt GuardrailsStack.Outputs.GuardrailVersion
     Export:
       Name: !Sub "${ClientName}-${Environment}-guardrail-version"
-
-  KmsKeyArn:
-    Condition: EnableCMEK
-    Description: Customer-managed KMS key ARN.
-    Value: !GetAtt EncryptionStack.Outputs.KmsKeyArn
-    Export:
-      Name: !Sub "${ClientName}-${Environment}-kms-key-arn"
 
   DashboardURL:
     Description: CloudWatch dashboard URL.

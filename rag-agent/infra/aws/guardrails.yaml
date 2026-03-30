@@ -82,11 +82,7 @@ Outputs:
   GuardrailId:
     Description: Bedrock Guardrail identifier.
     Value: !Ref AgentGuardrail
-    Export:
-      Name: !Sub "${ClientName}-${Environment}-guardrail-id"
 
   GuardrailVersion:
     Description: Bedrock Guardrail version number.
     Value: !GetAtt GuardrailVersion.Version
-    Export:
-      Name: !Sub "${ClientName}-${Environment}-guardrail-version"

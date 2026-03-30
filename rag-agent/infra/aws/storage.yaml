@@ -47,19 +47,16 @@ Resources:
       LifecycleConfiguration:
         Rules:
           - Id: TransitionToIA
-            Description: Move current objects to Standard-IA after 30 days.
             Status: Enabled
             Transitions:
               - StorageClass: STANDARD_IA
                 TransitionInDays: 30
           - Id: TransitionToGlacierIR
-            Description: Move current objects to Glacier Instant Retrieval after 90 days.
             Status: Enabled
             Transitions:
               - StorageClass: GLACIER_IR
                 TransitionInDays: 90
           - Id: ExpireOldVersions
-            Description: Delete non-current object versions after 90 days.
             Status: Enabled
             NoncurrentVersionExpiration:
               NoncurrentDays: 90
@@ -104,8 +101,6 @@ Resources:
       OwnershipControls:
         Rules:
           - ObjectOwnership: BucketOwnerPreferred
-      LoggingConfiguration:
-        LogFilePrefix: self/
       Tags:
         - Key: Name
           Value: !Sub "${ClientName}-${Environment}-s3-access-logs"
@@ -145,16 +140,6 @@ Resources:
             Condition:
               StringNotEquals:
                 "s3:x-amz-server-side-encryption": "aws:kms"
-
-          - Sid: EnforceClientPrefix
-            Effect: Deny
-            Principal: "*"
-            Action: "s3:PutObject"
-            Resource: !Sub "${DocumentBucket.Arn}/*"
-            Condition:
-              StringNotLike:
-                "s3:prefix":
-                  - !Sub "${ClientName}/*"
 
 Outputs:
   DocumentBucketName:

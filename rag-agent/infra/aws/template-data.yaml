@@ -1,0 +1,178 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  EarlyCore RAG Agent - Stateful Data Stack.
+  Deploy ONCE per environment. Never destroy unless decommissioning.
+  Contains S3 buckets, Secrets Manager secrets, and optional KMS key.
+  Outputs are exported for cross-stack import by the main compute stack.
+
+Parameters:
+  ClientName:
+    Type: String
+    Description: Client identifier used in all resource names and tags.
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$"
+
+  Environment:
+    Type: String
+    Description: Deployment environment.
+    Default: production
+    AllowedValues:
+      - production
+      - staging
+      - development
+
+  EarlycoreApiKey:
+    Type: String
+    Description: EarlyCore platform API key.
+    NoEcho: true
+
+  UseCMEK:
+    Type: String
+    Description: Use a customer-managed KMS key for encryption across all resources.
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+
+  TemplateBaseUrl:
+    Type: String
+    Description: S3 URL prefix where nested stack templates are stored.
+    Default: ""
+
+Conditions:
+  EnableCMEK: !Equals [!Ref UseCMEK, "true"]
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # KMS (conditional — must deploy before Storage/Secrets reference it)
+  # ---------------------------------------------------------------------------
+  EncryptionStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: EnableCMEK
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/encryption.yaml"
+      Parameters:
+        ClientName: !Ref ClientName
+        Environment: !Ref Environment
+        # TaskRoleArn is populated after IAM stack exists; use root account initially.
+        # The key policy allows the root account to manage and delegate via IAM policies.
+        TaskRoleArn: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-encryption-stack"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  # ---------------------------------------------------------------------------
+  # S3 Buckets (DeletionPolicy: Retain — data persists across compute redeploys)
+  # ---------------------------------------------------------------------------
+  StorageStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/storage.yaml"
+      Parameters:
+        ClientName: !Ref ClientName
+        Environment: !Ref Environment
+        KmsKeyArn: !If
+          - EnableCMEK
+          - !GetAtt EncryptionStack.Outputs.KmsKeyArn
+          - ""
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-storage-stack"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  # ---------------------------------------------------------------------------
+  # Secrets Manager (DeletionPolicy defaults prevent accidental loss)
+  # ---------------------------------------------------------------------------
+  SecretsStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/secrets.yaml"
+      Parameters:
+        ClientName: !Ref ClientName
+        Environment: !Ref Environment
+        EarlycoreApiKey: !Ref EarlycoreApiKey
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-secrets-stack"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+Outputs:
+  # ---------------------------------------------------------------------------
+  # Storage exports
+  # ---------------------------------------------------------------------------
+  DocumentBucketName:
+    Description: S3 document storage bucket name.
+    Value: !GetAtt StorageStack.Outputs.DocumentBucketName
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-data-DocumentBucketName"
+
+  DocumentBucketArn:
+    Description: S3 document storage bucket ARN.
+    Value: !GetAtt StorageStack.Outputs.DocumentBucketArn
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-data-DocumentBucketArn"
+
+  DocumentBucketDomain:
+    Description: S3 document storage bucket domain name.
+    Value: !GetAtt StorageStack.Outputs.DocumentBucketDomainName
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-data-DocumentBucketDomain"
+
+  # ---------------------------------------------------------------------------
+  # Secrets exports
+  # ---------------------------------------------------------------------------
+  EarlycoreApiKeySecretArn:
+    Description: ARN of the EarlyCore API key secret.
+    Value: !GetAtt SecretsStack.Outputs.EarlycoreApiKeySecretArn
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-data-EarlycoreApiKeySecretArn"
+
+  AgentConfigSecretArn:
+    Description: ARN of the agent configuration secret.
+    Value: !GetAtt SecretsStack.Outputs.AgentConfigSecretArn
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-data-AgentConfigSecretArn"
+
+  RedisAuthTokenSecretArn:
+    Description: ARN of the Redis auth token secret.
+    Value: !GetAtt SecretsStack.Outputs.RedisAuthTokenSecretArn
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-data-RedisAuthTokenSecretArn"
+
+  SecretsArnPrefix:
+    Description: ARN prefix for all secrets in this stack (for IAM scoping).
+    Value: !GetAtt SecretsStack.Outputs.SecretsArnPrefix
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-data-SecretsArnPrefix"
+
+  # ---------------------------------------------------------------------------
+  # KMS exports (conditional)
+  # ---------------------------------------------------------------------------
+  KmsKeyArn:
+    Condition: EnableCMEK
+    Description: Customer-managed KMS key ARN.
+    Value: !GetAtt EncryptionStack.Outputs.KmsKeyArn
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-data-KmsKeyArn"
+
+  KmsKeyId:
+    Condition: EnableCMEK
+    Description: Customer-managed KMS key ID.
+    Value: !GetAtt EncryptionStack.Outputs.KmsKeyId
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-data-KmsKeyId"

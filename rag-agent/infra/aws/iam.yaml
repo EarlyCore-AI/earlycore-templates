@@ -51,7 +51,6 @@ Resources:
   TaskExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${ClientName}-${Environment}-task-execution"
       Description: !Sub "ECS task execution role for ${ClientName} RAG agent. Used by Fargate to pull images, write logs, and read secrets."
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
@@ -121,7 +120,6 @@ Resources:
   TaskRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${ClientName}-${Environment}-task-role"
       Description: !Sub "ECS task role for ${ClientName} RAG agent. Grants application-level access to Bedrock, S3, and Secrets Manager."
       AssumeRolePolicyDocument:
         Version: "2012-10-17"

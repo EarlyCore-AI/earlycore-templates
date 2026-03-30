@@ -126,11 +126,7 @@ Outputs:
   KmsKeyArn:
     Description: ARN of the customer-managed KMS key.
     Value: !GetAtt EarlycoreKmsKey.Arn
-    Export:
-      Name: !Sub "${ClientName}-${Environment}-kms-key-arn"
 
   KmsKeyId:
     Description: ID of the customer-managed KMS key.
     Value: !Ref EarlycoreKmsKey
-    Export:
-      Name: !Sub "${ClientName}-${Environment}-kms-key-id"
