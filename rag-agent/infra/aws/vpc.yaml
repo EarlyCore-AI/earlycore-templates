@@ -1,0 +1,613 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  EarlyCore RAG Agent - VPC and Networking.
+  Creates VPC with public, private, and isolated subnets across 2 AZs,
+  NAT Gateway, Internet Gateway, route tables, security groups, and VPC endpoints.
+
+Parameters:
+  ClientName:
+    Type: String
+    Description: Client identifier for resource naming.
+
+  Environment:
+    Type: String
+    Description: Deployment environment.
+    AllowedValues:
+      - production
+      - staging
+      - development
+
+  VpcCidr:
+    Type: String
+    Description: CIDR block for the VPC.
+    Default: "10.0.0.0/16"
+
+  IsProduction:
+    Type: String
+    Description: Whether this is a production deployment.
+    AllowedValues:
+      - "true"
+      - "false"
+
+Conditions:
+  IsProductionEnv: !Equals [!Ref IsProduction, "true"]
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # VPC
+  # ---------------------------------------------------------------------------
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-vpc"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  # ---------------------------------------------------------------------------
+  # Internet Gateway
+  # ---------------------------------------------------------------------------
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-igw"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  # ---------------------------------------------------------------------------
+  # Public Subnets (ALB, NAT Gateway)
+  # ---------------------------------------------------------------------------
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select
+        - 0
+        - !Cidr [!Ref VpcCidr, 8, 8]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-public-1"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+        - Key: Tier
+          Value: public
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select
+        - 1
+        - !Cidr [!Ref VpcCidr, 8, 8]
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-public-2"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+        - Key: Tier
+          Value: public
+
+  # ---------------------------------------------------------------------------
+  # Private Subnets (ECS Fargate, Lambda)
+  # ---------------------------------------------------------------------------
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select
+        - 2
+        - !Cidr [!Ref VpcCidr, 8, 8]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-private-1"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+        - Key: Tier
+          Value: private
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select
+        - 3
+        - !Cidr [!Ref VpcCidr, 8, 8]
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-private-2"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+        - Key: Tier
+          Value: private
+
+  # ---------------------------------------------------------------------------
+  # Isolated Subnets (RDS, ElastiCache - no internet route)
+  # ---------------------------------------------------------------------------
+  IsolatedSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select
+        - 4
+        - !Cidr [!Ref VpcCidr, 8, 8]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-isolated-1"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+        - Key: Tier
+          Value: isolated
+
+  IsolatedSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select
+        - 5
+        - !Cidr [!Ref VpcCidr, 8, 8]
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-isolated-2"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+        - Key: Tier
+          Value: isolated
+
+  # ---------------------------------------------------------------------------
+  # NAT Gateway (single for cost; HA pair for production)
+  # ---------------------------------------------------------------------------
+  NatGatewayEIP1:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-nat-eip-1"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  NatGateway1:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP1.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-nat-1"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  NatGatewayEIP2:
+    Type: AWS::EC2::EIP
+    Condition: IsProductionEnv
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-nat-eip-2"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  NatGateway2:
+    Type: AWS::EC2::NatGateway
+    Condition: IsProductionEnv
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP2.AllocationId
+      SubnetId: !Ref PublicSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-nat-2"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  # ---------------------------------------------------------------------------
+  # Route Tables - Public
+  # ---------------------------------------------------------------------------
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-public-rt"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # ---------------------------------------------------------------------------
+  # Route Tables - Private (AZ 1)
+  # ---------------------------------------------------------------------------
+  PrivateRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-private-rt-1"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  PrivateDefaultRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      DestinationCidrBlock: "0.0.0.0/0"
+      NatGatewayId: !Ref NatGateway1
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable1
+
+  # ---------------------------------------------------------------------------
+  # Route Tables - Private (AZ 2)
+  # ---------------------------------------------------------------------------
+  PrivateRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-private-rt-2"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  PrivateDefaultRoute2:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      DestinationCidrBlock: "0.0.0.0/0"
+      NatGatewayId: !If
+        - IsProductionEnv
+        - !Ref NatGateway2
+        - !Ref NatGateway1
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable2
+
+  # ---------------------------------------------------------------------------
+  # Route Tables - Isolated (no default route, no internet)
+  # ---------------------------------------------------------------------------
+  IsolatedRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-isolated-rt"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  IsolatedSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref IsolatedSubnet1
+      RouteTableId: !Ref IsolatedRouteTable
+
+  IsolatedSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref IsolatedSubnet2
+      RouteTableId: !Ref IsolatedRouteTable
+
+  # ---------------------------------------------------------------------------
+  # Security Groups
+  # ---------------------------------------------------------------------------
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "ALB security group for ${ClientName} RAG agent"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: "0.0.0.0/0"
+          Description: HTTPS from anywhere
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-alb-sg"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "ECS tasks security group for ${ClientName} RAG agent"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8443
+          ToPort: 8443
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+          Description: Traffic from ALB to sidecar
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-ecs-sg"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "RDS security group for ${ClientName} RAG agent"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref ECSSecurityGroup
+          Description: PostgreSQL from ECS tasks only
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-rds-sg"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  CacheSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "ElastiCache security group for ${ClientName} RAG agent"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          SourceSecurityGroupId: !Ref ECSSecurityGroup
+          Description: Redis from ECS tasks only
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-redis-sg"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  # ---------------------------------------------------------------------------
+  # VPC Endpoints
+  # ---------------------------------------------------------------------------
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref PrivateRouteTable1
+        - !Ref PrivateRouteTable2
+
+  VPCEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "VPC endpoint security group for ${ClientName}"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref ECSSecurityGroup
+          Description: HTTPS from ECS tasks to VPC endpoints
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-vpce-sg"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  BedrockEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.bedrock-runtime"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      SecurityGroupIds:
+        - !Ref VPCEndpointSecurityGroup
+
+  SecretsManagerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.secretsmanager"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      SecurityGroupIds:
+        - !Ref VPCEndpointSecurityGroup
+
+  CloudWatchLogsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.logs"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      SecurityGroupIds:
+        - !Ref VPCEndpointSecurityGroup
+
+Outputs:
+  VpcId:
+    Description: VPC ID.
+    Value: !Ref VPC
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-VpcId"
+
+  PublicSubnetIds:
+    Description: Comma-separated public subnet IDs.
+    Value: !Join [",", [!Ref PublicSubnet1, !Ref PublicSubnet2]]
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-PublicSubnetIds"
+
+  PrivateSubnetIds:
+    Description: Comma-separated private subnet IDs.
+    Value: !Join [",", [!Ref PrivateSubnet1, !Ref PrivateSubnet2]]
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-PrivateSubnetIds"
+
+  IsolatedSubnetIds:
+    Description: Comma-separated isolated subnet IDs.
+    Value: !Join [",", [!Ref IsolatedSubnet1, !Ref IsolatedSubnet2]]
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-IsolatedSubnetIds"
+
+  ALBSecurityGroupId:
+    Description: ALB security group ID.
+    Value: !Ref ALBSecurityGroup
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-ALBSecurityGroupId"
+
+  ECSSecurityGroupId:
+    Description: ECS tasks security group ID.
+    Value: !Ref ECSSecurityGroup
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-ECSSecurityGroupId"
+
+  DatabaseSecurityGroupId:
+    Description: RDS security group ID.
+    Value: !Ref DatabaseSecurityGroup
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-DatabaseSecurityGroupId"
+
+  CacheSecurityGroupId:
+    Description: ElastiCache security group ID.
+    Value: !Ref CacheSecurityGroup
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-CacheSecurityGroupId"

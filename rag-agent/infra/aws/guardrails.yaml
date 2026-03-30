@@ -1,0 +1,92 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  EarlyCore RAG Agent - Bedrock Guardrails.
+  Provisions Bedrock Guardrails for content safety, prompt injection defence,
+  and PII protection on all LLM invocations.
+
+Parameters:
+  ClientName:
+    Type: String
+    Description: Client identifier for resource naming.
+
+  Environment:
+    Type: String
+    Description: Deployment environment.
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # Bedrock Guardrail
+  # ---------------------------------------------------------------------------
+  AgentGuardrail:
+    Type: AWS::Bedrock::Guardrail
+    Properties:
+      Name: !Sub "${ClientName}-${Environment}-guardrail"
+      Description: "EarlyCore security guardrail -- content safety, PII, and prompt injection defence"
+      BlockedInputMessaging: "Your request was blocked by security policy."
+      BlockedOutputsMessaging: "The response was blocked by security policy."
+
+      # Content filters
+      ContentPolicyConfig:
+        FiltersConfig:
+          - Type: SEXUAL
+            InputStrength: HIGH
+            OutputStrength: HIGH
+          - Type: VIOLENCE
+            InputStrength: HIGH
+            OutputStrength: HIGH
+          - Type: HATE
+            InputStrength: HIGH
+            OutputStrength: HIGH
+          - Type: INSULTS
+            InputStrength: MEDIUM
+            OutputStrength: MEDIUM
+          - Type: MISCONDUCT
+            InputStrength: HIGH
+            OutputStrength: HIGH
+          - Type: PROMPT_ATTACK
+            InputStrength: HIGH
+            OutputStrength: NONE
+
+      # Sensitive info filters -- anonymise contact info, block financial/identity data
+      SensitiveInformationPolicyConfig:
+        PiiEntitiesConfig:
+          - Type: EMAIL
+            Action: ANONYMIZE
+          - Type: PHONE
+            Action: ANONYMIZE
+          - Type: NAME
+            Action: ANONYMIZE
+          - Type: US_SOCIAL_SECURITY_NUMBER
+            Action: BLOCK
+          - Type: CREDIT_DEBIT_CARD_NUMBER
+            Action: BLOCK
+
+      Tags:
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: earlycore
+
+  # ---------------------------------------------------------------------------
+  # Guardrail Version (pinned for production use)
+  # ---------------------------------------------------------------------------
+  GuardrailVersion:
+    Type: AWS::Bedrock::GuardrailVersion
+    Properties:
+      GuardrailIdentifier: !Ref AgentGuardrail
+      Description: "Initial version"
+
+Outputs:
+  GuardrailId:
+    Description: Bedrock Guardrail identifier.
+    Value: !Ref AgentGuardrail
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-guardrail-id"
+
+  GuardrailVersion:
+    Description: Bedrock Guardrail version number.
+    Value: !GetAtt GuardrailVersion.Version
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-guardrail-version"

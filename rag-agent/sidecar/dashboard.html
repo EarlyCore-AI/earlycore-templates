@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ client_name }} — AI Security Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#ffffff;--surface:#f8f9fa;--surface-2:#f1f3f5;
+  --border:#e9ecef;--border-focus:#06bbbb;
+  --text:#1a1a2e;--text-dim:#6c757d;--text-muted:#adb5bd;
+  --cyan:#06bbbb;--cyan-light:#e6f9f9;--cyan-dark:#049e9e;
+  --green:#10b981;--green-bg:#ecfdf5;
+  --red:#ef4444;--red-bg:#fef2f2;
+  --amber:#f59e0b;--amber-bg:#fffbeb;
+  --blue:#3b82f6;--blue-bg:#eff6ff;
+  --font:'DM Sans',system-ui,-apple-system,sans-serif;
+  --mono:'IBM Plex Mono',monospace;
+  --radius:10px;--radius-sm:6px;
+  --shadow:0 1px 3px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04);
+  --shadow-lg:0 4px 12px rgba(0,0,0,.08);
+}
+html{font-size:14px;-webkit-font-smoothing:antialiased}
+body{background:var(--bg);color:var(--text);font-family:var(--font);min-height:100vh}
+
+/* -- Nav ------------------------------------------------ */
+nav{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:16px 28px;border-bottom:1px solid var(--border);
+  background:#fff;position:sticky;top:0;z-index:10;
+}
+.nav-left{display:flex;align-items:center;gap:14px}
+.nav-logo{
+  width:34px;height:34px;border-radius:8px;
+  background:var(--cyan);display:grid;place-items:center;
+  font-family:var(--mono);font-weight:700;font-size:14px;color:#fff;
+  box-shadow:0 2px 8px rgba(6,187,187,.3);
+}
+.nav-title{font-weight:600;font-size:17px;letter-spacing:-.01em}
+.nav-right{display:flex;align-items:center;gap:16px;font-size:13px}
+.status-pill{
+  display:flex;align-items:center;gap:6px;
+  padding:5px 14px;border-radius:20px;font-weight:500;font-size:12px;
+}
+.status-pill.ok{background:var(--green-bg);color:var(--green)}
+.status-pill.err{background:var(--red-bg);color:var(--red)}
+.status-dot{width:7px;height:7px;border-radius:50%;animation:pulse 2s ease infinite}
+.status-pill.ok .status-dot{background:var(--green)}
+.status-pill.err .status-dot{background:var(--red)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.nav-meta{color:var(--text-muted);font-family:var(--mono);font-size:12px}
+
+/* -- Layout --------------------------------------------- */
+main{max-width:1200px;margin:0 auto;padding:24px 28px;display:flex;flex-direction:column;gap:20px}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+@media(max-width:860px){.grid-2,.grid-3{grid-template-columns:1fr}}
+
+/* -- Cards ---------------------------------------------- */
+.card{
+  background:#fff;border:1px solid var(--border);border-radius:var(--radius);
+  padding:20px;box-shadow:var(--shadow);transition:box-shadow .2s,border-color .2s;
+}
+.card:hover{box-shadow:var(--shadow-lg);border-color:var(--border-focus)}
+.card-label{
+  font-size:12px;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--text-muted);font-weight:600;margin-bottom:10px;
+}
+.card-value{font-size:32px;font-weight:700;letter-spacing:-.03em;font-family:var(--mono);line-height:1}
+.card-sub{font-size:12px;color:var(--text-dim);margin-top:6px;font-family:var(--mono)}
+
+.stat-bar{height:4px;background:var(--surface-2);border-radius:2px;margin-top:10px;overflow:hidden}
+.stat-bar-fill{height:100%;border-radius:2px;transition:width .5s ease}
+
+/* -- Section header ------------------------------------- */
+.section-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
+.section-title{font-size:15px;font-weight:600;color:var(--text)}
+.section-divider{
+  font-size:11px;text-transform:uppercase;letter-spacing:.1em;
+  color:var(--text-muted);font-weight:700;padding:10px 0 6px;
+}
+
+/* -- Config section ------------------------------------- */
+.config-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:860px){.config-grid{grid-template-columns:1fr}}
+
+.config-row{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:10px 0;border-bottom:1px solid var(--surface-2);font-size:13px;
+}
+.config-row:last-child{border-bottom:none}
+.config-key{color:var(--text-dim);font-weight:500}
+.config-val{font-family:var(--mono);font-weight:500;font-size:13px;color:var(--text)}
+
+/* -- Guardrail checks ----------------------------------- */
+.guard-check{
+  display:flex;align-items:center;gap:8px;padding:8px 0;font-size:13px;
+}
+.check-icon{
+  width:20px;height:20px;border-radius:50%;display:grid;place-items:center;
+  font-size:11px;flex-shrink:0;
+}
+.check-icon.active{background:var(--green-bg);color:var(--green)}
+.check-icon.inactive{background:var(--red-bg);color:var(--red)}
+.guard-label{color:var(--text-dim);font-weight:500}
+
+/* -- Preset badge --------------------------------------- */
+.preset-badge{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:6px 16px;border-radius:20px;font-size:12px;font-weight:600;
+  letter-spacing:.03em;
+}
+.preset-badge.strict{background:var(--green-bg);color:var(--green)}
+.preset-badge.moderate{background:var(--cyan-light);color:var(--cyan-dark)}
+.preset-badge.permissive{background:var(--amber-bg);color:var(--amber)}
+
+/* -- Shield score --------------------------------------- */
+.shield-score{
+  display:flex;align-items:center;gap:10px;padding:12px 0;
+}
+.shield-icon{font-size:28px;line-height:1}
+.shield-text{font-size:13px;color:var(--text-dim)}
+.shield-text strong{color:var(--green);font-size:18px;display:block}
+
+/* -- Table ---------------------------------------------- */
+.table-wrap{overflow-x:auto;max-height:340px;overflow-y:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{
+  text-align:left;padding:10px 14px;color:var(--text-muted);font-weight:600;
+  border-bottom:2px solid var(--surface-2);position:sticky;top:0;
+  background:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.06em;
+}
+td{padding:10px 14px;border-bottom:1px solid var(--surface-2);color:var(--text-dim)}
+tr:hover td{background:var(--surface);color:var(--text)}
+.tag{
+  display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;
+  font-weight:600;margin-right:3px;
+}
+.tag.pass{background:var(--green-bg);color:var(--green)}
+.tag.blocked{background:var(--red-bg);color:var(--red)}
+.tag.redacted{background:var(--amber-bg);color:var(--amber)}
+
+/* -- Tester --------------------------------------------- */
+.tester{display:flex;flex-direction:column;gap:12px}
+.tester-input{display:flex;gap:8px}
+.tester-input input{
+  flex:1;background:var(--surface);border:1.5px solid var(--border);border-radius:var(--radius-sm);
+  padding:11px 14px;color:var(--text);font-family:var(--font);font-size:14px;
+  outline:none;transition:border-color .15s;
+}
+.tester-input input:focus{border-color:var(--cyan)}
+.tester-input input::placeholder{color:var(--text-muted)}
+.btn{
+  padding:11px 22px;border:none;border-radius:var(--radius-sm);cursor:pointer;
+  font-family:var(--font);font-weight:600;font-size:13px;transition:all .15s;
+}
+.btn-primary{background:var(--cyan);color:#fff}
+.btn-primary:hover{background:var(--cyan-dark);transform:translateY(-1px);box-shadow:0 4px 12px rgba(6,187,187,.25)}
+.btn-primary:active{transform:translateY(0)}
+.btn-primary:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.tester-result{
+  background:var(--surface);border:1.5px solid var(--border);border-radius:var(--radius-sm);
+  padding:14px 16px;font-size:13px;min-height:80px;color:var(--text-dim);
+  white-space:pre-wrap;line-height:1.7;font-family:var(--mono);
+}
+.tester-guardrails{display:flex;gap:6px;flex-wrap:wrap}
+
+/* -- Empty state ---------------------------------------- */
+.empty-state{
+  text-align:center;padding:40px 20px;color:var(--text-dim);
+}
+.empty-shield{font-size:48px;margin-bottom:12px;display:block}
+.empty-title{font-size:15px;font-weight:600;color:var(--text);margin-bottom:6px}
+.empty-sub{font-size:13px;color:var(--text-muted);margin-bottom:16px}
+.empty-curl{
+  display:inline-block;text-align:left;background:var(--surface);
+  border:1px solid var(--border);border-radius:var(--radius-sm);
+  padding:12px 16px;font-family:var(--mono);font-size:12px;
+  color:var(--text-dim);line-height:1.6;max-width:100%;overflow-x:auto;
+  cursor:pointer;position:relative;
+}
+.empty-curl:hover{border-color:var(--cyan)}
+.copy-hint{
+  position:absolute;top:4px;right:8px;font-size:10px;
+  color:var(--text-muted);font-family:var(--font);
+}
+
+/* -- Powered by ----------------------------------------- */
+.powered{
+  text-align:center;padding:20px;font-size:12px;color:var(--text-muted);
+  border-top:1px solid var(--border);margin-top:8px;
+}
+.powered a{color:var(--cyan);text-decoration:none;font-weight:600}
+.powered a:hover{text-decoration:underline}
+
+/* -- Animations ----------------------------------------- */
+@keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.card{animation:fadeUp .35s ease both}
+.card:nth-child(2){animation-delay:.04s}
+.card:nth-child(3){animation-delay:.08s}
+
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-left">
+    <div class="nav-logo">E</div>
+    <div class="nav-title">{{ client_name }}</div>
+  </div>
+  <div class="nav-right">
+    <div class="status-pill ok" id="statusPill">
+      <span class="status-dot"></span>
+      <span id="statusText">Agent Online</span>
+    </div>
+    <span class="nav-meta" id="uptime">00:00:00</span>
+  </div>
+</nav>
+
+<main>
+
+  <!-- ====== SECTION 1: Configuration Overview ====== -->
+  <div class="section-divider">Configuration Overview</div>
+  <div class="config-grid">
+
+    <!-- Left: Agent Configuration -->
+    <div class="card">
+      <div class="card-label">Agent Configuration</div>
+      <div class="config-row">
+        <span class="config-key">Model</span>
+        <span class="config-val">{{ model_name }}</span>
+      </div>
+      <div class="config-row">
+        <span class="config-key">Provider</span>
+        <span class="config-val">{{ provider }}</span>
+      </div>
+      <div class="config-row">
+        <span class="config-key">Upstream</span>
+        <span class="config-val">{{ upstream_url }}</span>
+      </div>
+      <div class="config-row">
+        <span class="config-key">Region</span>
+        <span class="config-val">{{ region }}</span>
+      </div>
+      <div class="config-row">
+        <span class="config-key">Fail Mode</span>
+        <span class="config-val">{{ fail_mode }}</span>
+      </div>
+    </div>
+
+    <!-- Right: Security Posture -->
+    <div class="card">
+      <div class="card-label">Security Posture</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <span class="preset-badge {{ guardrail_level }}" id="presetBadge">{{ guardrail_preset }}</span>
+        <div class="shield-score">
+          <span class="shield-icon" id="shieldIcon"></span>
+          <div class="shield-text">
+            <strong id="shieldLabel"></strong>
+            Protection Score
+          </div>
+        </div>
+      </div>
+      <div class="guard-check">
+        <span class="check-icon {{ injection_status }}" id="injIcon"></span>
+        <span class="guard-label">Prompt Injection Detection</span>
+      </div>
+      <div class="guard-check">
+        <span class="check-icon {{ pii_status }}" id="piiIcon"></span>
+        <span class="guard-label">PII Redaction (Presidio)</span>
+      </div>
+      <div class="guard-check">
+        <span class="check-icon {{ groundedness_status }}" id="gndIcon"></span>
+        <span class="guard-label">Groundedness Check</span>
+      </div>
+      <div class="guard-check">
+        <span class="check-icon {{ telemetry_status }}" id="telIcon"></span>
+        <span class="guard-label">Telemetry &amp; Audit Trail</span>
+      </div>
+      <div class="guard-check">
+        <span class="check-icon active" id="proxyIcon"></span>
+        <span class="guard-label">Reverse-Proxy Isolation</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====== Query Tester (prominent) ====== -->
+  <div class="card">
+    <div class="card-label">Query Tester</div>
+    <div class="tester">
+      <div class="tester-input">
+        <input type="text" id="queryInput" placeholder="Ask the agent something..." autofocus>
+        <button class="btn btn-primary" id="queryBtn" onclick="sendQuery()">Send</button>
+      </div>
+      <div class="tester-result" id="queryResult">Response will appear here...</div>
+      <div class="tester-guardrails" id="queryGuardrails"></div>
+    </div>
+  </div>
+
+  <!-- ====== SECTION 2: Live Monitoring ====== -->
+  <div class="section-divider">Live Monitoring</div>
+
+  <!-- Stats cards -->
+  <div class="grid-3">
+    <div class="card">
+      <div class="card-label">Requests Served</div>
+      <div class="card-value" style="color:var(--cyan)" id="totalRequests">0</div>
+      <div class="card-sub" id="reqRate">0 req/min</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Threats Blocked</div>
+      <div class="card-value" style="color:var(--red)" id="blocked">0</div>
+      <div class="stat-bar"><div class="stat-bar-fill" id="blockedBar" style="width:0%;background:var(--red)"></div></div>
+      <div class="card-sub" id="blockedPct">0% of traffic</div>
+    </div>
+    <div class="card">
+      <div class="card-label">PII Redacted</div>
+      <div class="card-value" style="color:var(--amber)" id="piiCount">0</div>
+      <div class="stat-bar"><div class="stat-bar-fill" id="piiBar" style="width:0%;background:var(--amber)"></div></div>
+      <div class="card-sub" id="piiTypes">--</div>
+    </div>
+  </div>
+
+  <!-- Recent Requests -->
+  <div class="card">
+    <div class="section-header">
+      <div class="card-label" style="margin-bottom:0">Recent Requests</div>
+    </div>
+    <div id="requestsContainer" style="margin-top:12px">
+      <!-- Empty state shown when no traffic yet -->
+      <div class="empty-state" id="emptyState">
+        <span class="empty-shield" id="emptyShieldIcon"></span>
+        <div class="empty-title">Agent is protected and monitoring</div>
+        <div class="empty-sub">Send your first request to see live security data.</div>
+        <div class="empty-curl" id="curlBlock" onclick="copyCurl()">
+          <span class="copy-hint" id="copyHint">Click to copy</span>
+curl -X POST http://localhost:8443/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "hello"}'</div>
+      </div>
+      <!-- Table shown once traffic arrives -->
+      <div class="table-wrap" id="tableWrap" style="display:none">
+        <table>
+          <thead><tr><th>Time</th><th>Path</th><th>Status</th><th>Latency</th><th>Guardrails</th></tr></thead>
+          <tbody id="requestsTable"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<div class="powered">
+  Secured by <a href="https://earlycore.dev" target="_blank">EarlyCore</a>
+</div>
+
+<script>
+/* ---- State ---- */
+const state = {
+  requests: [],
+  totalRequests: 0,
+  blocked: 0,
+  piiDetected: 0,
+  startTime: Date.now()
+};
+
+/* ---- Guardrail icons (checkmark / cross via inline SVG) ---- */
+(function initIcons() {
+  const checkSvg = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6L5 8.5L9.5 3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const crossSvg = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3L9 9M9 3L3 9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
+  document.querySelectorAll('.check-icon').forEach(el => {
+    el.innerHTML = el.classList.contains('active') || el.classList.contains('Active') ? checkSvg : crossSvg;
+    if (el.classList.contains('Active')) { el.classList.remove('Active'); el.classList.add('active'); }
+    if (el.classList.contains('Inactive')) { el.classList.remove('Inactive'); el.classList.add('inactive'); }
+  });
+  /* Shield icon */
+  const shieldSvg = '<svg width="32" height="32" viewBox="0 0 24 24" fill="none"><path d="M12 2L3 7v5c0 5.25 3.83 10.16 9 11.38C17.17 22.16 21 17.25 21 12V7l-9-5z" fill="#10b981" opacity="0.15" stroke="#10b981" stroke-width="1.5"/><path d="M8.5 12L11 14.5L16 9" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const el1 = document.getElementById('shieldIcon');
+  if (el1) el1.innerHTML = shieldSvg;
+  const el2 = document.getElementById('emptyShieldIcon');
+  if (el2) el2.innerHTML = '<svg width="48" height="48" viewBox="0 0 24 24" fill="none"><path d="M12 2L3 7v5c0 5.25 3.83 10.16 9 11.38C17.17 22.16 21 17.25 21 12V7l-9-5z" fill="#06bbbb" opacity="0.12" stroke="#06bbbb" stroke-width="1.5"/><path d="M8.5 12L11 14.5L16 9" stroke="#06bbbb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+  /* Compute protection score */
+  const checks = document.querySelectorAll('.check-icon.active');
+  const total = document.querySelectorAll('.check-icon').length;
+  const score = total > 0 ? Math.round((checks.length / total) * 100) : 0;
+  const label = document.getElementById('shieldLabel');
+  if (label) label.textContent = score + '%';
+})();
+
+/* ---- Uptime clock ---- */
+setInterval(() => {
+  const s = Math.floor((Date.now() - state.startTime) / 1000);
+  document.getElementById('uptime').textContent =
+    String(Math.floor(s / 3600)).padStart(2, '0') + ':' +
+    String(Math.floor((s % 3600) / 60)).padStart(2, '0') + ':' +
+    String(s % 60).padStart(2, '0');
+}, 1000);
+
+/* ---- Health poll ---- */
+async function pollHealth() {
+  try {
+    const r = await fetch('/health');
+    if (r.ok) {
+      document.getElementById('statusPill').className = 'status-pill ok';
+      document.getElementById('statusText').textContent = 'Agent Online';
+    } else throw 0;
+  } catch {
+    document.getElementById('statusPill').className = 'status-pill err';
+    document.getElementById('statusText').textContent = 'Offline';
+  }
+}
+setInterval(pollHealth, 5000);
+pollHealth();
+
+/* ---- Stats poll ---- */
+async function pollStats() {
+  try {
+    const r = await fetch('/api/stats');
+    if (!r.ok) return;
+    const d = await r.json();
+    state.totalRequests = d.total;
+    state.blocked = d.blocked;
+    state.piiDetected = d.pii_redacted;
+    state.requests = d.recent || [];
+    updateUI();
+  } catch { /* silent */ }
+}
+setInterval(pollStats, 3000);
+pollStats();
+
+/* ---- Query tester ---- */
+document.getElementById('queryInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') sendQuery();
+});
+
+async function sendQuery() {
+  const input = document.getElementById('queryInput'), btn = document.getElementById('queryBtn');
+  const result = document.getElementById('queryResult'), guards = document.getElementById('queryGuardrails');
+  const q = input.value.trim();
+  if (!q) return;
+  btn.disabled = true;
+  result.textContent = 'Thinking...';
+  result.style.color = 'var(--text-muted)';
+  guards.innerHTML = '';
+  try {
+    const start = performance.now();
+    const r = await fetch('/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: q })
+    });
+    const elapsed = Math.round(performance.now() - start);
+    if (r.status === 403) {
+      result.textContent = 'Blocked by security guardrails';
+      result.style.color = 'var(--red)';
+      guards.innerHTML = '<span class="tag blocked">INJECTION BLOCKED</span>';
+    } else if (r.ok) {
+      const d = await r.json();
+      result.textContent = d.answer || JSON.stringify(d, null, 2);
+      result.style.color = 'var(--text)';
+      guards.innerHTML = '<span class="tag pass">CLEAN</span>';
+      if (d.sources && d.sources.length) {
+        result.textContent += '\n\nSources: ' + d.sources.join(', ');
+      }
+    } else {
+      result.textContent = 'Error ' + r.status;
+      result.style.color = 'var(--red)';
+    }
+    /* Refresh stats immediately after a query */
+    setTimeout(pollStats, 500);
+  } catch (e) {
+    result.textContent = 'Network error: ' + e.message;
+    result.style.color = 'var(--red)';
+  }
+  btn.disabled = false;
+}
+
+/* ---- Update dashboard UI ---- */
+function updateUI() {
+  document.getElementById('totalRequests').textContent = state.totalRequests;
+  document.getElementById('blocked').textContent = state.blocked;
+  document.getElementById('piiCount').textContent = state.piiDetected;
+
+  const pct = state.totalRequests > 0 ? ((state.blocked / state.totalRequests) * 100).toFixed(1) : '0';
+  document.getElementById('blockedPct').textContent = pct + '% of traffic';
+  document.getElementById('blockedBar').style.width = Math.min(parseFloat(pct) * 3, 100) + '%';
+
+  const pp = state.totalRequests > 0 ? ((state.piiDetected / state.totalRequests) * 100).toFixed(1) : '0';
+  document.getElementById('piiBar').style.width = Math.min(parseFloat(pp) * 3, 100) + '%';
+
+  const el = (Date.now() - state.startTime) / 60000;
+  document.getElementById('reqRate').textContent = el > 0
+    ? (state.totalRequests / el).toFixed(1) + ' req/min'
+    : '0 req/min';
+
+  /* Toggle empty state vs table */
+  const hasData = state.requests.length > 0;
+  document.getElementById('emptyState').style.display = hasData ? 'none' : '';
+  document.getElementById('tableWrap').style.display = hasData ? '' : 'none';
+
+  if (hasData) {
+    const tbody = document.getElementById('requestsTable');
+    tbody.textContent = '';  /* clear safely */
+    state.requests.slice().reverse().forEach(r => {
+      const tr = document.createElement('tr');
+
+      const tdTime = document.createElement('td');
+      tdTime.style.cssText = 'font-family:var(--mono);font-size:12px';
+      tdTime.textContent = r.time;
+      tr.appendChild(tdTime);
+
+      const tdPath = document.createElement('td');
+      tdPath.style.fontFamily = 'var(--mono)';
+      tdPath.textContent = r.path;
+      tr.appendChild(tdPath);
+
+      const tdStatus = document.createElement('td');
+      tdStatus.style.fontWeight = '600';
+      tdStatus.style.color = r.status < 300 ? 'var(--green)' : r.status === 403 ? 'var(--red)' : 'var(--amber)';
+      tdStatus.textContent = r.status;
+      tr.appendChild(tdStatus);
+
+      const tdLatency = document.createElement('td');
+      tdLatency.style.fontFamily = 'var(--mono)';
+      tdLatency.textContent = r.latency;
+      tr.appendChild(tdLatency);
+
+      const tdTags = document.createElement('td');
+      (r.tags || []).forEach(t => {
+        const span = document.createElement('span');
+        span.className = 'tag ' + (t.startsWith('blocked') ? 'blocked' : t.startsWith('redacted') ? 'redacted' : 'pass');
+        span.textContent = t;
+        tdTags.appendChild(span);
+      });
+      tr.appendChild(tdTags);
+
+      tbody.appendChild(tr);
+    });
+  }
+}
+
+/* ---- Copy curl ---- */
+function copyCurl() {
+  const text = document.getElementById('curlBlock').innerText.replace('Click to copy', '').trim();
+  navigator.clipboard.writeText(text).then(() => {
+    const hint = document.getElementById('copyHint');
+    hint.textContent = 'Copied!';
+    setTimeout(() => { hint.textContent = 'Click to copy'; }, 2000);
+  });
+}
+</script>
+</body>
+</html>

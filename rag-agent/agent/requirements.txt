@@ -1,0 +1,16 @@
+fastapi>=0.109.0
+uvicorn>=0.27.0
+pydantic>=2.6.0
+pydantic-settings>=2.0.0
+httpx>=0.26.0
+python-multipart>=0.0.9
+boto3>=1.34.0
+# Vector stores (uncomment what you need)
+psycopg[binary]>=3.1.0  # for pgvector (default)
+# pinecone-client>=3.0.0  # for Pinecone
+# chromadb>=0.4.0  # for ChromaDB
+# Embeddings
+# sentence-transformers>=2.0.0  # for local embeddings (no API key needed)
+# Document processing
+# pypdf>=3.0.0  # for PDF ingestion
+# python-docx>=1.0.0  # for DOCX ingestion

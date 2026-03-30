@@ -1,0 +1,38 @@
+version: "1.0"
+
+agent:
+  name: "{{ client_name }}"
+  type: rag
+  framework: haystack
+
+llm:
+  provider: bedrock
+  model: anthropic.claude-3-5-sonnet-20241022-v2:0
+  api_key_env: LLM_API_KEY
+
+vectorstore:
+  provider: pgvector
+  connection_env: VECTORSTORE_URL
+
+guardrails:
+  preset: general  # Options: general, financial-services, healthcare, insurance, legal, strict
+  local_pii: true  # true = Presidio runs locally (slower, max privacy). false = regex only, platform handles deep analysis.
+  # Preset configures defaults below. Override any field to customise:
+  # level: moderate
+  # block_injection: true
+  # block_pii: true
+  # check_groundedness: true
+  # blocked_topics: []
+
+monitoring:
+  enabled: true
+  earlycore_endpoint: https://api.earlycore.dev
+  telemetry_mode: sidecar
+  redteam_mode: api_only
+
+alerts:
+  channels: []
+
+deployment:
+  target: docker
+  region: eu-west-2

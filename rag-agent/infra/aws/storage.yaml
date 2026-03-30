@@ -1,0 +1,176 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  EarlyCore RAG Agent - S3 Document Storage.
+  Creates an S3 bucket for document storage with SSE-KMS encryption,
+  versioning, lifecycle rules, and strict public access blocking.
+
+Parameters:
+  ClientName:
+    Type: String
+    Description: Client identifier for resource naming.
+
+  Environment:
+    Type: String
+    Description: Deployment environment.
+
+  KmsKeyArn:
+    Type: String
+    Description: ARN of the customer-managed KMS key (empty string uses AWS-managed alias/aws/s3).
+    Default: ""
+
+Conditions:
+  HasCMEK: !Not [!Equals [!Ref KmsKeyArn, ""]]
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # Document Bucket
+  # ---------------------------------------------------------------------------
+  DocumentBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${ClientName}-rag-documents-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: "aws:kms"
+              KMSMasterKeyID: !If [HasCMEK, !Ref KmsKeyArn, "alias/aws/s3"]
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: TransitionToIA
+            Description: Move current objects to Standard-IA after 30 days.
+            Status: Enabled
+            Transitions:
+              - StorageClass: STANDARD_IA
+                TransitionInDays: 30
+          - Id: TransitionToGlacierIR
+            Description: Move current objects to Glacier Instant Retrieval after 90 days.
+            Status: Enabled
+            Transitions:
+              - StorageClass: GLACIER_IR
+                TransitionInDays: 90
+          - Id: ExpireOldVersions
+            Description: Delete non-current object versions after 90 days.
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 90
+      LoggingConfiguration:
+        DestinationBucketName: !Ref AccessLogsBucket
+        LogFilePrefix: !Sub "${ClientName}/documents/"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-documents"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  # ---------------------------------------------------------------------------
+  # S3 Access Logs Bucket
+  # ---------------------------------------------------------------------------
+  AccessLogsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${ClientName}-s3-access-logs-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldLogs
+            Status: Enabled
+            ExpirationInDays: 90
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerPreferred
+      LoggingConfiguration:
+        LogFilePrefix: self/
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-s3-access-logs"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  # ---------------------------------------------------------------------------
+  # Bucket Policy
+  # ---------------------------------------------------------------------------
+  DocumentBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DocumentBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyUnencryptedTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt DocumentBucket.Arn
+              - !Sub "${DocumentBucket.Arn}/*"
+            Condition:
+              Bool:
+                "aws:SecureTransport": "false"
+
+          - Sid: DenyIncorrectEncryptionHeader
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:PutObject"
+            Resource: !Sub "${DocumentBucket.Arn}/*"
+            Condition:
+              StringNotEquals:
+                "s3:x-amz-server-side-encryption": "aws:kms"
+
+          - Sid: EnforceClientPrefix
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:PutObject"
+            Resource: !Sub "${DocumentBucket.Arn}/*"
+            Condition:
+              StringNotLike:
+                "s3:prefix":
+                  - !Sub "${ClientName}/*"
+
+Outputs:
+  DocumentBucketName:
+    Description: Name of the S3 document storage bucket.
+    Value: !Ref DocumentBucket
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-DocumentBucketName"
+
+  DocumentBucketArn:
+    Description: ARN of the S3 document storage bucket.
+    Value: !GetAtt DocumentBucket.Arn
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-DocumentBucketArn"
+
+  DocumentBucketDomainName:
+    Description: Domain name of the S3 document storage bucket.
+    Value: !GetAtt DocumentBucket.DomainName
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-DocumentBucketDomain"

@@ -1,0 +1,193 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  EarlyCore RAG Agent - RDS PostgreSQL with pgvector.
+  Creates an RDS PostgreSQL 16 instance with pgvector extension support,
+  encrypted storage, automated backups, and managed credentials.
+
+Parameters:
+  ClientName:
+    Type: String
+    Description: Client identifier for resource naming.
+
+  Environment:
+    Type: String
+    Description: Deployment environment.
+
+  InstanceClass:
+    Type: String
+    Description: RDS instance class.
+    Default: db.t4g.small
+
+  StorageGB:
+    Type: Number
+    Description: Allocated storage in GB.
+    Default: 20
+    MinValue: 20
+    MaxValue: 1000
+
+  IsolatedSubnetIds:
+    Type: CommaDelimitedList
+    Description: Comma-separated isolated subnet IDs for the DB subnet group.
+
+  DatabaseSecurityGroupId:
+    Type: String
+    Description: Security group ID for the RDS instance.
+
+  IsProduction:
+    Type: String
+    Description: Whether this is a production deployment.
+    AllowedValues:
+      - "true"
+      - "false"
+
+  KmsKeyArn:
+    Type: String
+    Description: ARN of the customer-managed KMS key (empty string uses default AWS-managed key).
+    Default: ""
+
+Conditions:
+  IsProductionEnv: !Equals [!Ref IsProduction, "true"]
+  HasCMEK: !Not [!Equals [!Ref KmsKeyArn, ""]]
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # DB Subnet Group
+  # ---------------------------------------------------------------------------
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub "Isolated subnets for ${ClientName} RDS instance"
+      SubnetIds: !Ref IsolatedSubnetIds
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-db-subnet-group"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  # ---------------------------------------------------------------------------
+  # DB Parameter Group (pgvector support)
+  # ---------------------------------------------------------------------------
+  DBParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: !Sub "PostgreSQL 16 parameters for ${ClientName} RAG agent with pgvector"
+      Family: postgres16
+      Parameters:
+        shared_preload_libraries: "vector"
+        log_min_duration_statement: "1000"
+        log_statement: "ddl"
+        rds.force_ssl: "1"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-db-params"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  # ---------------------------------------------------------------------------
+  # Enhanced Monitoring Role
+  # ---------------------------------------------------------------------------
+  EnhancedMonitoringRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ClientName}-${Environment}-rds-monitoring"
+      Description: !Sub "RDS enhanced monitoring role for ${ClientName}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: monitoring.rds.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-rds-monitoring-role"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  # ---------------------------------------------------------------------------
+  # RDS PostgreSQL Instance
+  # ---------------------------------------------------------------------------
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub "${ClientName}-${Environment}-postgres"
+      DBInstanceClass: !Ref InstanceClass
+      Engine: postgres
+      EngineVersion: "16.4"
+      DBName: earlycore
+      MasterUsername: earlycore_admin
+      ManageMasterUserPassword: true
+      AllocatedStorage: !Ref StorageGB
+      StorageType: gp3
+      StorageEncrypted: true
+      KmsKeyId: !If [HasCMEK, !Ref KmsKeyArn, !Ref "AWS::NoValue"]
+      VPCSecurityGroups:
+        - !Ref DatabaseSecurityGroupId
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      DBParameterGroupName: !Ref DBParameterGroup
+      MultiAZ: !If [IsProductionEnv, true, false]
+      BackupRetentionPeriod: 7
+      PreferredBackupWindow: "03:00-04:00"
+      PreferredMaintenanceWindow: "sun:04:30-sun:05:30"
+      DeletionProtection: true
+      EnableIAMDatabaseAuthentication: true
+      PubliclyAccessible: false
+      EnablePerformanceInsights: true
+      PerformanceInsightsRetentionPeriod: 7
+      MonitoringInterval: 60
+      MonitoringRoleArn: !GetAtt EnhancedMonitoringRole.Arn
+      CopyTagsToSnapshot: true
+      AutoMinorVersionUpgrade: true
+      EnableCloudwatchLogsExports:
+        - postgresql
+        - upgrade
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-postgres"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+Outputs:
+  Endpoint:
+    Description: RDS PostgreSQL endpoint address.
+    Value: !GetAtt DBInstance.Endpoint.Address
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-DBEndpoint"
+
+  Port:
+    Description: RDS PostgreSQL endpoint port.
+    Value: !GetAtt DBInstance.Endpoint.Port
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-DBPort"
+
+  DBInstanceIdentifier:
+    Description: RDS instance identifier.
+    Value: !Ref DBInstance
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-DBInstanceId"
+
+  MasterUserSecretArn:
+    Description: ARN of the Secrets Manager secret containing the master user credentials.
+    Value: !GetAtt DBInstance.MasterUserSecret.SecretArn
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-DBSecretArn"

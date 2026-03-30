@@ -1,0 +1,296 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  EarlyCore RAG Agent - IAM Roles and Policies.
+  Creates ECS task execution role (for Fargate infrastructure) and ECS task role
+  (for application code). Follows least-privilege with scoped resource ARNs.
+
+Parameters:
+  ClientName:
+    Type: String
+    Description: Client identifier for resource naming.
+
+  Environment:
+    Type: String
+    Description: Deployment environment.
+
+  LLMProvider:
+    Type: String
+    Description: LLM provider for conditional Bedrock permissions.
+    AllowedValues:
+      - bedrock
+      - openai
+      - anthropic
+
+  DocumentBucketArn:
+    Type: String
+    Description: ARN of the S3 document storage bucket.
+
+  SecretsArnPrefix:
+    Type: String
+    Description: ARN prefix for Secrets Manager secrets scoped to this stack.
+
+  UseBedrockGuardrails:
+    Type: String
+    Description: Enable Bedrock Guardrails permissions.
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+
+Conditions:
+  IsBedrock: !Equals [!Ref LLMProvider, "bedrock"]
+  EnableGuardrails: !And
+    - !Equals [!Ref UseBedrockGuardrails, "true"]
+    - !Equals [!Ref LLMProvider, "bedrock"]
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # ECS Task Execution Role
+  # Used by Fargate infrastructure to pull images, write logs, read secrets.
+  # ---------------------------------------------------------------------------
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ClientName}-${Environment}-task-execution"
+      Description: !Sub "ECS task execution role for ${ClientName} RAG agent. Used by Fargate to pull images, write logs, and read secrets."
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              ArnLike:
+                "aws:SourceArn": !Sub "arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:*"
+              StringEquals:
+                "aws:SourceAccount": !Ref "AWS::AccountId"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-task-execution-role"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  TaskExecutionPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub "${ClientName}-${Environment}-task-execution-policy"
+      Roles:
+        - !Ref TaskExecutionRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # Pull container images from ECR
+          - Sid: ECRAuth
+            Effect: Allow
+            Action:
+              - ecr:GetAuthorizationToken
+            Resource: "*"
+
+          - Sid: ECRPull
+            Effect: Allow
+            Action:
+              - ecr:BatchCheckLayerAvailability
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+            Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/*"
+
+          # Write container logs to CloudWatch
+          - Sid: CloudWatchLogs
+            Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ecs/${ClientName}/*"
+
+          # Read secrets for container startup (API keys, DB credentials)
+          - Sid: SecretsManagerRead
+            Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource: !Sub "${SecretsArnPrefix}*"
+
+  # ---------------------------------------------------------------------------
+  # ECS Task Role
+  # Used by running containers to access AWS services (Bedrock, S3, etc.).
+  # ---------------------------------------------------------------------------
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ClientName}-${Environment}-task-role"
+      Description: !Sub "ECS task role for ${ClientName} RAG agent. Grants application-level access to Bedrock, S3, and Secrets Manager."
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              ArnLike:
+                "aws:SourceArn": !Sub "arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:*"
+              StringEquals:
+                "aws:SourceAccount": !Ref "AWS::AccountId"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-task-role"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  # --- S3 Document Access (scoped to client prefix) ---
+  S3DocumentAccessPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub "${ClientName}-${Environment}-s3-document-access"
+      Roles:
+        - !Ref TaskRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: S3ListBucket
+            Effect: Allow
+            Action:
+              - s3:ListBucket
+            Resource: !Ref DocumentBucketArn
+            Condition:
+              StringLike:
+                "s3:prefix":
+                  - !Sub "${ClientName}/*"
+                  - !Sub "${ClientName}"
+
+          - Sid: S3ObjectAccess
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+            Resource: !Sub "${DocumentBucketArn}/${ClientName}/*"
+
+  # --- Secrets Manager Read (scoped to client prefix) ---
+  SecretsManagerPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub "${ClientName}-${Environment}-secrets-read"
+      Roles:
+        - !Ref TaskRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: SecretsRead
+            Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource: !Sub "${SecretsArnPrefix}*"
+            Condition:
+              StringEquals:
+                "secretsmanager:ResourceTag/Client": !Ref ClientName
+
+  # --- Bedrock Access (conditional) ---
+  BedrockAccessPolicy:
+    Type: AWS::IAM::Policy
+    Condition: IsBedrock
+    Properties:
+      PolicyName: !Sub "${ClientName}-${Environment}-bedrock-access"
+      Roles:
+        - !Ref TaskRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: BedrockInvoke
+            Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+            Resource:
+              - !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-*"
+              - !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-*"
+              - !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/meta.llama*"
+
+  # --- Bedrock Guardrails Access (conditional) ---
+  BedrockGuardrailsPolicy:
+    Type: AWS::IAM::Policy
+    Condition: EnableGuardrails
+    Properties:
+      PolicyName: !Sub "${ClientName}-${Environment}-bedrock-guardrails"
+      Roles:
+        - !Ref TaskRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: BedrockGuardrails
+            Effect: Allow
+            Action:
+              - bedrock:ApplyGuardrail
+              - bedrock:GetGuardrail
+            Resource:
+              - !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:guardrail/*"
+
+  # --- CloudWatch Metrics (for custom application metrics) ---
+  CloudWatchMetricsPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub "${ClientName}-${Environment}-cloudwatch-metrics"
+      Roles:
+        - !Ref TaskRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PutMetrics
+            Effect: Allow
+            Action:
+              - cloudwatch:PutMetricData
+            Resource: "*"
+            Condition:
+              StringEquals:
+                "cloudwatch:namespace": !Sub "EarlyCore/${ClientName}"
+
+  # --- ECS Exec (for debugging via aws ecs execute-command) ---
+  ECSExecPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub "${ClientName}-${Environment}-ecs-exec"
+      Roles:
+        - !Ref TaskRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: SSMMessages
+            Effect: Allow
+            Action:
+              - ssmmessages:CreateControlChannel
+              - ssmmessages:CreateDataChannel
+              - ssmmessages:OpenControlChannel
+              - ssmmessages:OpenDataChannel
+            Resource: "*"
+
+Outputs:
+  TaskExecutionRoleArn:
+    Description: ARN of the ECS task execution role.
+    Value: !GetAtt TaskExecutionRole.Arn
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-TaskExecutionRoleArn"
+
+  TaskRoleArn:
+    Description: ARN of the ECS task role.
+    Value: !GetAtt TaskRole.Arn
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-TaskRoleArn"
+
+  TaskExecutionRoleName:
+    Description: Name of the ECS task execution role.
+    Value: !Ref TaskExecutionRole
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-TaskExecutionRoleName"
+
+  TaskRoleName:
+    Description: Name of the ECS task role.
+    Value: !Ref TaskRole
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-TaskRoleName"

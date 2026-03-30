@@ -1,0 +1,47 @@
+description: "EarlyCore Quick Security Scan"
+
+targets:
+  - id: http
+    label: "Local Agent (via sidecar)"
+    config:
+      url: "http://localhost:8443/query"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+      body:
+        question: "{{prompt}}"
+      responseParser: "json.answer"
+
+redteam:
+  purpose: |
+    Quick security validation of a RAG agent deployed via EarlyCore.
+    Tests critical attack vectors: prompt injection, jailbreak, indirect injection, PII exfiltration.
+
+  numTests: 25
+
+  plugins:
+    # Critical: prompt injection and jailbreak
+    - prompt-injection
+    - jailbreak
+
+    # Critical for RAG: indirect injection via documents
+    - indirect-prompt-injection
+
+    # PII and data exfiltration
+    - pii:direct
+    - pii:session
+
+    # Harmful content
+    - harmful:cybercrime
+    - harmful:violent-crime
+
+    # Context adherence (hallucination)
+    - hallucination
+
+    # Information disclosure
+    - overreliance
+
+  strategies:
+    # Test with different injection techniques
+    - jailbreak
+    - prompt-injection

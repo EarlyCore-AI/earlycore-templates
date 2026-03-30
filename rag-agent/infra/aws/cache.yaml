@@ -1,0 +1,120 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  EarlyCore RAG Agent - ElastiCache Redis.
+  Creates a Redis 7.x replication group with encryption at rest and in transit,
+  deployed in isolated subnets. Single node for non-production, replicated for production.
+
+Parameters:
+  ClientName:
+    Type: String
+    Description: Client identifier for resource naming.
+
+  Environment:
+    Type: String
+    Description: Deployment environment.
+
+  NodeType:
+    Type: String
+    Description: ElastiCache node type.
+    Default: cache.t4g.micro
+
+  IsolatedSubnetIds:
+    Type: CommaDelimitedList
+    Description: Comma-separated isolated subnet IDs for the cache subnet group.
+
+  CacheSecurityGroupId:
+    Type: String
+    Description: Security group ID for the ElastiCache cluster.
+
+  CacheAuthTokenSecretArn:
+    Type: String
+    Description: ARN of the Secrets Manager secret holding Redis auth token JSON key `auth_token`.
+
+  IsProduction:
+    Type: String
+    Description: Whether this is a production deployment.
+    AllowedValues:
+      - "true"
+      - "false"
+
+  KmsKeyArn:
+    Type: String
+    Description: ARN of the customer-managed KMS key (empty string uses AWS-managed key).
+    Default: ""
+
+Conditions:
+  IsProductionEnv: !Equals [!Ref IsProduction, "true"]
+  HasCMEK: !Not [!Equals [!Ref KmsKeyArn, ""]]
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # Cache Subnet Group
+  # ---------------------------------------------------------------------------
+  CacheSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      Description: !Sub "Isolated subnets for ${ClientName} ElastiCache Redis"
+      SubnetIds: !Ref IsolatedSubnetIds
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-cache-subnet-group"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  # ---------------------------------------------------------------------------
+  # Redis Replication Group
+  # ---------------------------------------------------------------------------
+  RedisReplicationGroup:
+    Type: AWS::ElastiCache::ReplicationGroup
+    Properties:
+      ReplicationGroupDescription: !Sub "${ClientName} ${Environment} RAG agent cache"
+      Engine: redis
+      EngineVersion: "7.1"
+      CacheNodeType: !Ref NodeType
+      NumCacheClusters: !If [IsProductionEnv, 2, 1]
+      AutomaticFailoverEnabled: !If [IsProductionEnv, true, false]
+      MultiAZEnabled: !If [IsProductionEnv, true, false]
+      AtRestEncryptionEnabled: true
+      KmsKeyId: !If [HasCMEK, !Ref KmsKeyArn, !Ref AWS::NoValue]
+      TransitEncryptionEnabled: true
+      AuthToken: !Sub "{{resolve:secretsmanager:${CacheAuthTokenSecretArn}:SecretString:auth_token}}"
+      CacheSubnetGroupName: !Ref CacheSubnetGroup
+      SecurityGroupIds:
+        - !Ref CacheSecurityGroupId
+      CacheParameterGroupName: default.redis7
+      SnapshotRetentionLimit: !If [IsProductionEnv, 7, 1]
+      SnapshotWindow: 03:00-04:00
+      PreferredMaintenanceWindow: sun:05:00-sun:06:00
+      AutoMinorVersionUpgrade: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-redis"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+Outputs:
+  Endpoint:
+    Description: Redis primary endpoint address.
+    Value: !GetAtt RedisReplicationGroup.PrimaryEndPoint.Address
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-CacheEndpoint"
+
+  Port:
+    Description: Redis primary endpoint port.
+    Value: !GetAtt RedisReplicationGroup.PrimaryEndPoint.Port
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-CachePort"
+
+  ReplicationGroupId:
+    Description: ElastiCache replication group ID.
+    Value: !Ref RedisReplicationGroup
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-CacheReplicationGroupId"

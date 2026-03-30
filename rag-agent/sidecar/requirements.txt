@@ -1,0 +1,7 @@
+fastapi>=0.109.0
+uvicorn>=0.27.0
+httpx>=0.26.0
+pydantic-settings>=2.0.0
+# Presidio — only needed if LOCAL_PII=true (full local PII detection)
+presidio-analyzer>=2.2.0
+presidio-anonymizer>=2.2.0

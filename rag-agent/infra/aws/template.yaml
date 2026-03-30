@@ -1,0 +1,515 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  EarlyCore RAG Agent - Master Stack.
+  Orchestrates nested stacks for VPC, ECS, RDS, ElastiCache, S3, IAM,
+  monitoring, and secrets management.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: General
+        Parameters:
+          - ClientName
+          - Environment
+          - AlertEmail
+      - Label:
+          default: Networking
+        Parameters:
+          - VpcCidr
+      - Label:
+          default: Compute
+        Parameters:
+          - ContainerCpu
+          - ContainerMemory
+          - DesiredCount
+          - MaxCount
+          - AgentImageUri
+          - SidecarImageUri
+      - Label:
+          default: Database
+        Parameters:
+          - UseManagedDatabase
+          - DatabaseInstanceClass
+          - DatabaseStorageGB
+      - Label:
+          default: Cache
+        Parameters:
+          - UseManagedCache
+          - CacheNodeType
+      - Label:
+          default: LLM Provider
+        Parameters:
+          - LLMProvider
+      - Label:
+          default: Security
+        Parameters:
+          - UseBedrockGuardrails
+          - UseCMEK
+      - Label:
+          default: Secrets
+        Parameters:
+          - EarlycoreApiKey
+
+Parameters:
+  ClientName:
+    Type: String
+    Description: Client identifier used in all resource names and tags.
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$"
+    ConstraintDescription: >-
+      3-30 characters, lowercase alphanumeric and hyphens only,
+      must start and end with alphanumeric.
+
+  Environment:
+    Type: String
+    Description: Deployment environment.
+    Default: production
+    AllowedValues:
+      - production
+      - staging
+      - development
+
+  VpcCidr:
+    Type: String
+    Description: CIDR block for the VPC.
+    Default: 10.0.0.0/16
+    AllowedPattern: "^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}/\\d{1,2}$"
+
+  ContainerCpu:
+    Type: Number
+    Description: Fargate CPU units for the agent task.
+    Default: 512
+    AllowedValues:
+      - 256
+      - 512
+      - 1024
+      - 2048
+      - 4096
+
+  ContainerMemory:
+    Type: Number
+    Description: Fargate memory in MB for the agent task.
+    Default: 1024
+    AllowedValues:
+      - 512
+      - 1024
+      - 2048
+      - 4096
+      - 8192
+      - 16384
+
+  DesiredCount:
+    Type: Number
+    Description: Number of ECS tasks to run.
+    Default: 2
+    MinValue: 1
+    MaxValue: 50
+
+  MaxCount:
+    Type: Number
+    Description: Maximum number of ECS tasks for auto-scaling.
+    Default: 10
+    MinValue: 1
+    MaxValue: 100
+
+  AgentImageUri:
+    Type: String
+    Description: ECR or registry image URI for the RAG agent container.
+
+  SidecarImageUri:
+    Type: String
+    Description: Image URI for the EarlyCore sidecar container.
+    Default: ghcr.io/earlycore/sidecar:latest
+
+  UseManagedDatabase:
+    Type: String
+    Description: Use RDS PostgreSQL with pgvector (true) or container-local postgres (false).
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+
+  DatabaseInstanceClass:
+    Type: String
+    Description: RDS instance class.
+    Default: db.t4g.small
+    AllowedValues:
+      - db.t4g.micro
+      - db.t4g.small
+      - db.t4g.medium
+      - db.r6g.large
+      - db.r6g.xlarge
+
+  DatabaseStorageGB:
+    Type: Number
+    Description: RDS allocated storage in GB.
+    Default: 20
+    MinValue: 20
+    MaxValue: 1000
+
+  UseManagedCache:
+    Type: String
+    Description: Use ElastiCache Redis (true) or container-local redis (false).
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+
+  CacheNodeType:
+    Type: String
+    Description: ElastiCache node type.
+    Default: cache.t4g.micro
+    AllowedValues:
+      - cache.t4g.micro
+      - cache.t4g.small
+      - cache.t4g.medium
+      - cache.r6g.large
+
+  LLMProvider:
+    Type: String
+    Description: LLM provider for the RAG agent.
+    Default: bedrock
+    AllowedValues:
+      - bedrock
+      - openai
+      - anthropic
+
+  EarlycoreApiKey:
+    Type: String
+    Description: EarlyCore platform API key.
+    NoEcho: true
+
+  AlertEmail:
+    Type: String
+    Description: Email address for CloudWatch alarm notifications.
+    AllowedPattern: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
+    ConstraintDescription: Must be a valid email address.
+
+  UseBedrockGuardrails:
+    Type: String
+    Description: Enable Bedrock Guardrails for content safety and prompt injection defence.
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+
+  UseCMEK:
+    Type: String
+    Description: Use a customer-managed KMS key for encryption across all resources.
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+
+  TemplateBaseUrl:
+    Type: String
+    Description: S3 URL prefix where nested stack templates are stored.
+    Default: ""
+
+Conditions:
+  UseManagedDB: !Equals [!Ref UseManagedDatabase, "true"]
+  UseManagedRedis: !Equals [!Ref UseManagedCache, "true"]
+  IsBedrock: !Equals [!Ref LLMProvider, bedrock]
+  IsProduction: !Equals [!Ref Environment, production]
+  EnableGuardrails: !And
+    - !Equals [!Ref UseBedrockGuardrails, "true"]
+    - !Equals [!Ref LLMProvider, bedrock]
+  EnableCMEK: !Equals [!Ref UseCMEK, "true"]
+
+Resources:
+  VPCStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/vpc.yaml"
+      Parameters:
+        ClientName: !Ref ClientName
+        Environment: !Ref Environment
+        VpcCidr: !Ref VpcCidr
+        IsProduction: !If [IsProduction, "true", "false"]
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-vpc-stack"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  SecretsStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/secrets.yaml"
+      Parameters:
+        ClientName: !Ref ClientName
+        Environment: !Ref Environment
+        EarlycoreApiKey: !Ref EarlycoreApiKey
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-secrets-stack"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  StorageStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/storage.yaml"
+      Parameters:
+        ClientName: !Ref ClientName
+        Environment: !Ref Environment
+        KmsKeyArn: !If
+          - EnableCMEK
+          - !GetAtt EncryptionStack.Outputs.KmsKeyArn
+          - ""
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-storage-stack"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  IAMStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/iam.yaml"
+      Parameters:
+        ClientName: !Ref ClientName
+        Environment: !Ref Environment
+        LLMProvider: !Ref LLMProvider
+        DocumentBucketArn: !GetAtt StorageStack.Outputs.DocumentBucketArn
+        SecretsArnPrefix: !GetAtt SecretsStack.Outputs.SecretsArnPrefix
+        UseBedrockGuardrails: !Ref UseBedrockGuardrails
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-iam-stack"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  GuardrailsStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: EnableGuardrails
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/guardrails.yaml"
+      Parameters:
+        ClientName: !Ref ClientName
+        Environment: !Ref Environment
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-guardrails-stack"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  EncryptionStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: EnableCMEK
+    DependsOn:
+      - IAMStack
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/encryption.yaml"
+      Parameters:
+        ClientName: !Ref ClientName
+        Environment: !Ref Environment
+        TaskRoleArn: !GetAtt IAMStack.Outputs.TaskRoleArn
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-encryption-stack"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  DatabaseStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: UseManagedDB
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/database.yaml"
+      Parameters:
+        ClientName: !Ref ClientName
+        Environment: !Ref Environment
+        InstanceClass: !Ref DatabaseInstanceClass
+        StorageGB: !Ref DatabaseStorageGB
+        IsolatedSubnetIds: !GetAtt VPCStack.Outputs.IsolatedSubnetIds
+        DatabaseSecurityGroupId: !GetAtt VPCStack.Outputs.DatabaseSecurityGroupId
+        IsProduction: !If [IsProduction, "true", "false"]
+        KmsKeyArn: !If
+          - EnableCMEK
+          - !GetAtt EncryptionStack.Outputs.KmsKeyArn
+          - ""
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-database-stack"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  CacheStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: UseManagedRedis
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/cache.yaml"
+      Parameters:
+        ClientName: !Ref ClientName
+        Environment: !Ref Environment
+        NodeType: !Ref CacheNodeType
+        IsolatedSubnetIds: !GetAtt VPCStack.Outputs.IsolatedSubnetIds
+        CacheSecurityGroupId: !GetAtt VPCStack.Outputs.CacheSecurityGroupId
+        CacheAuthTokenSecretArn: !GetAtt SecretsStack.Outputs.RedisAuthTokenSecretArn
+        IsProduction: !If [IsProduction, "true", "false"]
+        KmsKeyArn: !If
+          - EnableCMEK
+          - !GetAtt EncryptionStack.Outputs.KmsKeyArn
+          - ""
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-cache-stack"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  MonitoringStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/monitoring.yaml"
+      Parameters:
+        ClientName: !Ref ClientName
+        Environment: !Ref Environment
+        AlertEmail: !Ref AlertEmail
+        UseManagedDB: !Ref UseManagedDatabase
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-monitoring-stack"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  ECSStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - IAMStack
+      - MonitoringStack
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/ecs.yaml"
+      Parameters:
+        ClientName: !Ref ClientName
+        Environment: !Ref Environment
+        VpcId: !GetAtt VPCStack.Outputs.VpcId
+        PublicSubnetIds: !GetAtt VPCStack.Outputs.PublicSubnetIds
+        PrivateSubnetIds: !GetAtt VPCStack.Outputs.PrivateSubnetIds
+        ALBSecurityGroupId: !GetAtt VPCStack.Outputs.ALBSecurityGroupId
+        ECSSecurityGroupId: !GetAtt VPCStack.Outputs.ECSSecurityGroupId
+        TaskExecutionRoleArn: !GetAtt IAMStack.Outputs.TaskExecutionRoleArn
+        TaskRoleArn: !GetAtt IAMStack.Outputs.TaskRoleArn
+        AgentImageUri: !Ref AgentImageUri
+        SidecarImageUri: !Ref SidecarImageUri
+        ContainerCpu: !Ref ContainerCpu
+        ContainerMemory: !Ref ContainerMemory
+        DesiredCount: !Ref DesiredCount
+        MaxCount: !Ref MaxCount
+        AgentLogGroupName: !GetAtt MonitoringStack.Outputs.AgentLogGroupName
+        SidecarLogGroupName: !GetAtt MonitoringStack.Outputs.SidecarLogGroupName
+        EarlycoreApiKeySecretArn: !GetAtt SecretsStack.Outputs.EarlycoreApiKeySecretArn
+        AgentConfigSecretArn: !GetAtt SecretsStack.Outputs.AgentConfigSecretArn
+        DocumentBucketName: !GetAtt StorageStack.Outputs.DocumentBucketName
+        DatabaseEndpoint: !If
+          - UseManagedDB
+          - !GetAtt DatabaseStack.Outputs.Endpoint
+          - ""
+        CacheEndpoint: !If
+          - UseManagedRedis
+          - !GetAtt CacheStack.Outputs.Endpoint
+          - ""
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-ecs-stack"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+Outputs:
+  AgentEndpoint:
+    Description: DNS name of the Application Load Balancer for the RAG agent.
+    Value: !GetAtt ECSStack.Outputs.LoadBalancerDNS
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-agent-endpoint"
+
+  DocumentBucketName:
+    Description: S3 bucket for document upload and storage.
+    Value: !GetAtt StorageStack.Outputs.DocumentBucketName
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-document-bucket"
+
+  DatabaseEndpoint:
+    Condition: UseManagedDB
+    Description: RDS PostgreSQL endpoint.
+    Value: !GetAtt DatabaseStack.Outputs.Endpoint
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-database-endpoint"
+
+  CacheEndpoint:
+    Condition: UseManagedRedis
+    Description: ElastiCache Redis endpoint.
+    Value: !GetAtt CacheStack.Outputs.Endpoint
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-cache-endpoint"
+
+  GuardrailId:
+    Condition: EnableGuardrails
+    Description: Bedrock Guardrail identifier.
+    Value: !GetAtt GuardrailsStack.Outputs.GuardrailId
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-guardrail-id"
+
+  GuardrailVersion:
+    Condition: EnableGuardrails
+    Description: Bedrock Guardrail version.
+    Value: !GetAtt GuardrailsStack.Outputs.GuardrailVersion
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-guardrail-version"
+
+  KmsKeyArn:
+    Condition: EnableCMEK
+    Description: Customer-managed KMS key ARN.
+    Value: !GetAtt EncryptionStack.Outputs.KmsKeyArn
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-kms-key-arn"
+
+  DashboardURL:
+    Description: CloudWatch dashboard URL.
+    Value: !GetAtt MonitoringStack.Outputs.DashboardURL
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-dashboard-url"
+
+  VpcId:
+    Description: VPC ID for the deployment.
+    Value: !GetAtt VPCStack.Outputs.VpcId
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-vpc-id"

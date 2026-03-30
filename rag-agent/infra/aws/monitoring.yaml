@@ -1,0 +1,361 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  EarlyCore RAG Agent - Monitoring and Alerting.
+  Creates CloudWatch log groups, dashboard, alarms for ECS/ALB/RDS metrics,
+  and SNS topic for alert notifications.
+
+Parameters:
+  ClientName:
+    Type: String
+    Description: Client identifier for resource naming.
+
+  Environment:
+    Type: String
+    Description: Deployment environment.
+
+  AlertEmail:
+    Type: String
+    Description: Email address for alarm notifications.
+
+  KmsKeyArn:
+    Type: String
+    Description: ARN of the customer-managed KMS key (empty string uses AWS-managed defaults).
+    Default: ""
+
+  LogRetentionDays:
+    Type: Number
+    Description: CloudWatch log retention in days.
+    Default: 30
+    AllowedValues:
+      - 7
+      - 14
+      - 30
+      - 60
+      - 90
+      - 180
+      - 365
+
+  UseManagedDB:
+    Type: String
+    Description: Whether managed RDS is in use for conditional alarms.
+    AllowedValues:
+      - "true"
+      - "false"
+
+Conditions:
+  HasManagedDB: !Equals [!Ref UseManagedDB, "true"]
+  HasCMEK: !Not [!Equals [!Ref KmsKeyArn, ""]]
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # Log Groups
+  # ---------------------------------------------------------------------------
+  AgentLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/${ClientName}/agent"
+      RetentionInDays: !Ref LogRetentionDays
+      KmsKeyId: !If [HasCMEK, !Ref KmsKeyArn, !Ref "AWS::NoValue"]
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-agent-logs"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  SidecarLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/${ClientName}/sidecar"
+      RetentionInDays: !Ref LogRetentionDays
+      KmsKeyId: !If [HasCMEK, !Ref KmsKeyArn, !Ref "AWS::NoValue"]
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-sidecar-logs"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  # ---------------------------------------------------------------------------
+  # SNS Topic for Alerts
+  # ---------------------------------------------------------------------------
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ClientName}-${Environment}-alerts"
+      DisplayName: !Sub "EarlyCore ${ClientName} Alerts"
+      KmsMasterKeyId: !If [HasCMEK, !Ref KmsKeyArn, "alias/aws/sns"]
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-alerts"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: ManagedBy
+          Value: earlycore
+
+  AlertEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  # ---------------------------------------------------------------------------
+  # CloudWatch Alarms - ECS
+  # ---------------------------------------------------------------------------
+  ECSCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ClientName}-${Environment}-ecs-cpu-high"
+      AlarmDescription: !Sub "ECS CPU utilization exceeds 80% for ${ClientName} ${Environment}"
+      Namespace: AWS/ECS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: ClusterName
+          Value: !Sub "${ClientName}-${Environment}-cluster"
+        - Name: ServiceName
+          Value: !Sub "${ClientName}-${Environment}-service"
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: missing
+      AlarmActions:
+        - !Ref AlertTopic
+      OKActions:
+        - !Ref AlertTopic
+
+  ECSMemoryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ClientName}-${Environment}-ecs-memory-high"
+      AlarmDescription: !Sub "ECS memory utilization exceeds 80% for ${ClientName} ${Environment}"
+      Namespace: AWS/ECS
+      MetricName: MemoryUtilization
+      Dimensions:
+        - Name: ClusterName
+          Value: !Sub "${ClientName}-${Environment}-cluster"
+        - Name: ServiceName
+          Value: !Sub "${ClientName}-${Environment}-service"
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: missing
+      AlarmActions:
+        - !Ref AlertTopic
+      OKActions:
+        - !Ref AlertTopic
+
+  # ---------------------------------------------------------------------------
+  # CloudWatch Alarms - ALB
+  # ---------------------------------------------------------------------------
+  ALB5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ClientName}-${Environment}-alb-5xx-high"
+      AlarmDescription: !Sub "ALB 5XX errors exceed 5 per minute for ${ClientName} ${Environment}"
+      Namespace: AWS/ApplicationELB
+      MetricName: HTTPCode_Target_5XX_Count
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Sub "${ClientName}-${Environment}-alb"
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 5
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  # ---------------------------------------------------------------------------
+  # CloudWatch Alarms - RDS (conditional)
+  # ---------------------------------------------------------------------------
+  RDSCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasManagedDB
+    Properties:
+      AlarmName: !Sub "${ClientName}-${Environment}-rds-cpu-high"
+      AlarmDescription: !Sub "RDS CPU utilization exceeds 80% for ${ClientName} ${Environment}"
+      Namespace: AWS/RDS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Sub "${ClientName}-${Environment}-postgres"
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: missing
+      AlarmActions:
+        - !Ref AlertTopic
+      OKActions:
+        - !Ref AlertTopic
+
+  RDSStorageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasManagedDB
+    Properties:
+      AlarmName: !Sub "${ClientName}-${Environment}-rds-storage-low"
+      AlarmDescription: !Sub "RDS free storage space below 5 GB for ${ClientName} ${Environment}"
+      Namespace: AWS/RDS
+      MetricName: FreeStorageSpace
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Sub "${ClientName}-${Environment}-postgres"
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5368709120
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: missing
+      AlarmActions:
+        - !Ref AlertTopic
+
+  # ---------------------------------------------------------------------------
+  # CloudWatch Dashboard
+  # ---------------------------------------------------------------------------
+  Dashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "${ClientName}-${Environment}-rag-agent"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "text",
+              "x": 0, "y": 0, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "# EarlyCore RAG Agent - ${ClientName} (${Environment})"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 1, "width": 8, "height": 6,
+              "properties": {
+                "title": "ECS CPU Utilization",
+                "metrics": [
+                  ["AWS/ECS", "CPUUtilization", "ClusterName", "${ClientName}-${Environment}-cluster", "ServiceName", "${ClientName}-${Environment}-service"]
+                ],
+                "period": 300,
+                "stat": "Average",
+                "region": "${AWS::Region}",
+                "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8, "y": 1, "width": 8, "height": 6,
+              "properties": {
+                "title": "ECS Memory Utilization",
+                "metrics": [
+                  ["AWS/ECS", "MemoryUtilization", "ClusterName", "${ClientName}-${Environment}-cluster", "ServiceName", "${ClientName}-${Environment}-service"]
+                ],
+                "period": 300,
+                "stat": "Average",
+                "region": "${AWS::Region}",
+                "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 16, "y": 1, "width": 8, "height": 6,
+              "properties": {
+                "title": "Running Task Count",
+                "metrics": [
+                  ["ECS/ContainerInsights", "RunningTaskCount", "ClusterName", "${ClientName}-${Environment}-cluster", "ServiceName", "${ClientName}-${Environment}-service"]
+                ],
+                "period": 300,
+                "stat": "Average",
+                "region": "${AWS::Region}",
+                "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 7, "width": 8, "height": 6,
+              "properties": {
+                "title": "ALB Request Count",
+                "metrics": [
+                  ["AWS/ApplicationELB", "RequestCount", "LoadBalancer", "${ClientName}-${Environment}-alb"]
+                ],
+                "period": 60,
+                "stat": "Sum",
+                "region": "${AWS::Region}",
+                "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8, "y": 7, "width": 8, "height": 6,
+              "properties": {
+                "title": "ALB Response Time (p50, p95, p99)",
+                "metrics": [
+                  ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", "${ClientName}-${Environment}-alb", {"stat": "p50", "label": "p50"}],
+                  ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", "${ClientName}-${Environment}-alb", {"stat": "p95", "label": "p95"}],
+                  ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", "${ClientName}-${Environment}-alb", {"stat": "p99", "label": "p99"}]
+                ],
+                "period": 60,
+                "region": "${AWS::Region}",
+                "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 16, "y": 7, "width": 8, "height": 6,
+              "properties": {
+                "title": "ALB HTTP 5xx Count",
+                "metrics": [
+                  ["AWS/ApplicationELB", "HTTPCode_Target_5XX_Count", "LoadBalancer", "${ClientName}-${Environment}-alb"]
+                ],
+                "period": 60,
+                "stat": "Sum",
+                "region": "${AWS::Region}",
+                "view": "timeSeries"
+              }
+            }
+          ]
+        }
+
+Outputs:
+  AgentLogGroupName:
+    Description: CloudWatch log group name for agent container.
+    Value: !Ref AgentLogGroup
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-AgentLogGroupName"
+
+  AgentLogGroupArn:
+    Description: CloudWatch log group ARN for agent container.
+    Value: !GetAtt AgentLogGroup.Arn
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-AgentLogGroupArn"
+
+  SidecarLogGroupName:
+    Description: CloudWatch log group name for sidecar container.
+    Value: !Ref SidecarLogGroup
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-SidecarLogGroupName"
+
+  AlertTopicArn:
+    Description: SNS topic ARN for alarm notifications.
+    Value: !Ref AlertTopic
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-AlertTopicArn"
+
+  DashboardURL:
+    Description: URL of the CloudWatch dashboard.
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${ClientName}-${Environment}-rag-agent"
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-DashboardURL"

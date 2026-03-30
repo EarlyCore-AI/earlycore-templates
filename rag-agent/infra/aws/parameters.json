@@ -1,0 +1,74 @@
+[
+  {
+    "ParameterKey": "ClientName",
+    "ParameterValue": "my-company"
+  },
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "staging"
+  },
+  {
+    "ParameterKey": "VpcCidr",
+    "ParameterValue": "10.0.0.0/16"
+  },
+  {
+    "ParameterKey": "ContainerCpu",
+    "ParameterValue": "512"
+  },
+  {
+    "ParameterKey": "ContainerMemory",
+    "ParameterValue": "1024"
+  },
+  {
+    "ParameterKey": "DesiredCount",
+    "ParameterValue": "2"
+  },
+  {
+    "ParameterKey": "MaxCount",
+    "ParameterValue": "10"
+  },
+  {
+    "ParameterKey": "AgentImageUri",
+    "ParameterValue": "REPLACE_WITH_ECR_IMAGE_URI"
+  },
+  {
+    "ParameterKey": "SidecarImageUri",
+    "ParameterValue": "ghcr.io/earlycore/sidecar:latest"
+  },
+  {
+    "ParameterKey": "UseManagedDatabase",
+    "ParameterValue": "true"
+  },
+  {
+    "ParameterKey": "DatabaseInstanceClass",
+    "ParameterValue": "db.t4g.small"
+  },
+  {
+    "ParameterKey": "DatabaseStorageGB",
+    "ParameterValue": "20"
+  },
+  {
+    "ParameterKey": "UseManagedCache",
+    "ParameterValue": "true"
+  },
+  {
+    "ParameterKey": "CacheNodeType",
+    "ParameterValue": "cache.t4g.micro"
+  },
+  {
+    "ParameterKey": "LLMProvider",
+    "ParameterValue": "bedrock"
+  },
+  {
+    "ParameterKey": "EarlycoreApiKey",
+    "ParameterValue": "REPLACE_WITH_EARLYCORE_API_KEY"
+  },
+  {
+    "ParameterKey": "AlertEmail",
+    "ParameterValue": "alerts@example.com"
+  },
+  {
+    "ParameterKey": "TemplateBaseUrl",
+    "ParameterValue": "REPLACE_WITH_S3_TEMPLATE_URL"
+  }
+]

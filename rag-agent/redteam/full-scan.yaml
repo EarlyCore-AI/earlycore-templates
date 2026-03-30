@@ -1,0 +1,64 @@
+description: "EarlyCore Full Security Scan"
+
+targets:
+  - id: http
+    label: "Local Agent (via sidecar)"
+    config:
+      url: "http://localhost:8443/query"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+      body:
+        question: "{{prompt}}"
+      responseParser: "json.answer"
+
+redteam:
+  purpose: |
+    Comprehensive security assessment of a RAG agent.
+    Tests all OWASP LLM Top 10 attack vectors.
+
+  numTests: 100
+
+  plugins:
+    - prompt-injection
+    - jailbreak
+    - hijacking
+    - indirect-prompt-injection
+    - pii:direct
+    - pii:session
+    - pii:social
+    - harmful:violent-crime
+    - harmful:non-violent-crime
+    - harmful:cybercrime
+    - harmful:chemical-biological-weapons
+    - harmful:illegal-drugs
+    - harmful:harassment-bullying
+    - harmful:self-harm
+    - harmful:sex-content
+    - harmful:copyright-violations
+    - hallucination
+    - overreliance
+    - excessive-agency
+    - ascii-smuggling
+    - bfla
+    - bola
+    - competitors
+    - contracts
+    - debug-access
+    - imitation
+    - politics
+    - religion
+    - ssrf
+    - shell-injection
+    - sql-injection
+
+  strategies:
+    - jailbreak
+    - jailbreak:tree
+    - prompt-injection
+    - multilingual
+    - crescendo
+
+  frameworks:
+    - owasp-llm-top-10
+    - eu:ai-act

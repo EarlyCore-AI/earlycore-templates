@@ -1,0 +1,136 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  EarlyCore RAG Agent - Customer-Managed Encryption Key (CMEK).
+  Creates a KMS key shared across all stack resources (S3, RDS, ElastiCache,
+  Secrets Manager) with a least-privilege key policy.
+
+Parameters:
+  ClientName:
+    Type: String
+    Description: Client identifier for resource naming.
+
+  Environment:
+    Type: String
+    Description: Deployment environment.
+
+  TaskRoleArn:
+    Type: String
+    Description: ARN of the ECS task role that needs decrypt access.
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # Customer-Managed KMS Key
+  # ---------------------------------------------------------------------------
+  EarlycoreKmsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub "EarlyCore encryption key for ${ClientName}-${Environment}"
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: RootAccountAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+
+          - Sid: ECSTaskAccess
+            Effect: Allow
+            Principal:
+              AWS: !Ref TaskRoleArn
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey
+            Resource: "*"
+
+          - Sid: RDSAccess
+            Effect: Allow
+            Principal:
+              Service: rds.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey*
+              - kms:CreateGrant
+              - kms:ListGrants
+              - kms:DescribeKey
+            Resource: "*"
+
+          - Sid: ElastiCacheAccess
+            Effect: Allow
+            Principal:
+              Service: elasticache.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey*
+              - kms:CreateGrant
+              - kms:DescribeKey
+            Resource: "*"
+
+          - Sid: SecretsManagerAccess
+            Effect: Allow
+            Principal:
+              Service: secretsmanager.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey*
+              - kms:CreateGrant
+              - kms:DescribeKey
+            Resource: "*"
+
+          - Sid: CloudWatchLogsAccess
+            Effect: Allow
+            Principal:
+              Service: !Sub "logs.${AWS::Region}.amazonaws.com"
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:GenerateDataKey*
+              - kms:DescribeKey
+            Resource: "*"
+            Condition:
+              ArnLike:
+                "kms:EncryptionContext:aws:logs:arn": !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*"
+
+          - Sid: SNSAccess
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey*
+              - kms:DescribeKey
+            Resource: "*"
+
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClientName}-${Environment}-kms-key"
+        - Key: Client
+          Value: !Ref ClientName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: earlycore
+
+  # ---------------------------------------------------------------------------
+  # Key Alias
+  # ---------------------------------------------------------------------------
+  KmsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/earlycore-${ClientName}-${Environment}"
+      TargetKeyId: !Ref EarlycoreKmsKey
+
+Outputs:
+  KmsKeyArn:
+    Description: ARN of the customer-managed KMS key.
+    Value: !GetAtt EarlycoreKmsKey.Arn
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-kms-key-arn"
+
+  KmsKeyId:
+    Description: ID of the customer-managed KMS key.
+    Value: !Ref EarlycoreKmsKey
+    Export:
+      Name: !Sub "${ClientName}-${Environment}-kms-key-id"
